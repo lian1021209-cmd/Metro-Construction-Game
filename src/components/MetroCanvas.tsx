@@ -899,6 +899,20 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               ctx.restore();
 
               for (const rv of st.map.rivers) {
+                if (rv.skipPolylineWaterCheck) {
+                  const mid = rv.points[Math.floor(rv.points.length / 2)];
+                  if (mid) {
+                    const msp = proj(mid.x, mid.y);
+                    ctx.save();
+                    ctx.font = '500 12px "Noto Sans TC", sans-serif';
+                    ctx.fillStyle = 'rgba(148, 163, 184, 0.45)';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(rv.name, msp.x, msp.y);
+                    ctx.restore();
+                  }
+                  continue;
+                }
                 const poly = riverPathToPolygonRing(rv);
                 if (poly.length >= 4) {
                   ctx.save();

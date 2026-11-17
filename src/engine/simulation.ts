@@ -106,9 +106,10 @@ export function isWaterAt(
     }
   }
 
-  // 3. Major rivers & creeks (Huangpu River, Suzhou Creek)
+  // 3. Major rivers & creeks (e.g. Suzhou Creek; Huangpu River uses exact riverbank polygon in waterPolygons)
   for (const rv of map.rivers) {
-    if (rv.points.length >= 2 && distToPolylineWorld(wx, wy, rv.points) <= Math.max(4.0, rv.width * 0.5)) {
+    if (rv.skipPolylineWaterCheck) continue;
+    if (rv.points.length >= 2 && distToPolylineWorld(wx, wy, rv.points) <= rv.width * 0.5) {
       return { isWater: true, reason: 'river' };
     }
   }

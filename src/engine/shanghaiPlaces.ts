@@ -12,7 +12,7 @@ export interface ShanghaiPlaceGeo {
 export const SHANGHAI_PLACES_WGS84: ShanghaiPlaceGeo[] = [
   // 黃浦區 Huangpu
   { name: '人民廣場', lat: 31.2328, lon: 121.4754, kind: 'landmark' },
-  { name: '外灘', lat: 31.2384, lon: 121.4878, kind: 'landmark' },
+  { name: '外灘', lat: 31.2384, lon: 121.4858, kind: 'landmark' },
   { name: '南京東路', lat: 31.2368, lon: 121.4820, kind: 'road' },
   { name: '大世界', lat: 31.2275, lon: 121.4775, kind: 'landmark' },
   { name: '豫園', lat: 31.2272, lon: 121.4888, kind: 'landmark' },
@@ -23,8 +23,8 @@ export const SHANGHAI_PLACES_WGS84: ShanghaiPlaceGeo[] = [
   { name: '田子坊', lat: 31.2090, lon: 121.4685, kind: 'landmark' },
   { name: '五里橋', lat: 31.1975, lon: 121.4775, kind: 'neighborhood' },
   { name: '董家渡', lat: 31.2130, lon: 121.4985, kind: 'neighborhood' },
-  { name: '南浦大橋', lat: 31.2072, lon: 121.4992, kind: 'landmark' },
-  { name: '世博博物館', lat: 31.1935, lon: 121.4805, kind: 'landmark' },
+  { name: '南浦大橋', lat: 31.2082, lon: 121.4955, kind: 'landmark' },
+  { name: '世博博物館', lat: 31.1950, lon: 121.4770, kind: 'landmark' },
 
   // 靜安區 Jing'an
   { name: '靜安寺', lat: 31.2236, lon: 121.4465, kind: 'landmark' },
@@ -50,7 +50,7 @@ export const SHANGHAI_PLACES_WGS84: ShanghaiPlaceGeo[] = [
   { name: '漕河涇', lat: 31.1685, lon: 121.4045, kind: 'neighborhood' },
   { name: '上海南站', lat: 31.1544, lon: 121.4295, kind: 'landmark' },
   { name: '龍華寺', lat: 31.1745, lon: 121.4505, kind: 'landmark' },
-  { name: '徐匯濱江', lat: 31.1725, lon: 121.4605, kind: 'neighborhood' },
+  { name: '徐匯濱江', lat: 31.1725, lon: 121.4565, kind: 'neighborhood' },
   { name: '上海植物園', lat: 31.1480, lon: 121.4455, kind: 'landmark' },
   { name: '華涇', lat: 31.1240, lon: 121.4480, kind: 'neighborhood' },
 
@@ -123,7 +123,7 @@ export const SHANGHAI_PLACES_WGS84: ShanghaiPlaceGeo[] = [
   { name: '祝橋', lat: 31.1245, lon: 121.7510, kind: 'neighborhood' },
   { name: '浦東機場', lat: 31.1443, lon: 121.8083, kind: 'landmark' },
   { name: '臨港新片區', lat: 30.9035, lon: 121.9180, kind: 'neighborhood' },
-  { name: '滴水湖', lat: 30.8965, lon: 121.9380, kind: 'landmark' },
+  { name: '滴水湖', lat: 30.8925, lon: 121.9350, kind: 'landmark' },
 
   // 閔行區 Minhang
   { name: '虹橋火車站', lat: 31.1942, lon: 121.3204, kind: 'landmark' },
@@ -177,7 +177,7 @@ export const SHANGHAI_PLACES_WGS84: ShanghaiPlaceGeo[] = [
   { name: '華新', lat: 31.2425, lon: 121.2285, kind: 'neighborhood' },
   { name: '青浦新城', lat: 31.1495, lon: 121.1235, kind: 'neighborhood' },
   { name: '朱家角', lat: 31.1112, lon: 121.0535, kind: 'neighborhood' },
-  { name: '金澤', lat: 31.0785, lon: 120.9225, kind: 'neighborhood' },
+  { name: '金澤', lat: 31.0725, lon: 120.9285, kind: 'neighborhood' },
   { name: '練塘', lat: 30.9965, lon: 121.0385, kind: 'neighborhood' },
 
   // 奉賢區 Fengxian
@@ -194,18 +194,18 @@ export const SHANGHAI_PLACES_WGS84: ShanghaiPlaceGeo[] = [
   { name: '楓涇古鎮', lat: 30.8925, lon: 121.0115, kind: 'landmark' },
   { name: '亭林', lat: 30.8785, lon: 121.3185, kind: 'neighborhood' },
   { name: '金山衛', lat: 30.7285, lon: 121.3455, kind: 'neighborhood' },
-  { name: '金山城市沙灘', lat: 30.7135, lon: 121.3545, kind: 'landmark' },
+  { name: '金山城市沙灘', lat: 30.7205, lon: 121.3515, kind: 'landmark' },
   { name: '山陽', lat: 30.7445, lon: 121.3765, kind: 'neighborhood' },
   { name: '漕涇', lat: 30.7855, lon: 121.4425, kind: 'neighborhood' },
 
   // 崇明區 Chongming
   { name: '城橋', lat: 31.6225, lon: 121.3985, kind: 'neighborhood' },
-  { name: '南門港', lat: 31.6115, lon: 121.3965, kind: 'landmark' },
+  { name: '南門港', lat: 31.6175, lon: 121.3995, kind: 'landmark' },
   { name: '堡鎮', lat: 31.5425, lon: 121.6225, kind: 'neighborhood' },
   { name: '陳家鎮', lat: 31.5115, lon: 121.8255, kind: 'neighborhood' },
   { name: '東平森林公園', lat: 31.6855, lon: 121.4795, kind: 'landmark' },
   { name: '東灘濕地', lat: 31.5165, lon: 121.9585, kind: 'landmark' },
-  { name: '廟鎮', lat: 31.6825, lon: 121.2815, kind: 'neighborhood' },
+  { name: '廟鎮', lat: 31.6945, lon: 121.2875, kind: 'neighborhood' },
   { name: '長興島', lat: 31.3895, lon: 121.7015, kind: 'neighborhood' },
   { name: '橫沙島', lat: 31.3375, lon: 121.8425, kind: 'neighborhood' },
 ];

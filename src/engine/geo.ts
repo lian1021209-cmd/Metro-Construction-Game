@@ -162,7 +162,7 @@ export function getPureCanvasGeoStyle(): StyleSpecification {
 export function riverPathToPolygonRing(river: RiverPath): { x: number; y: number }[] {
   const pts = river.points;
   if (pts.length < 2) return [];
-  const halfW = Math.max(4, river.width * 0.5);
+  const halfW = Math.max(0.7, river.width * 0.5);
   const leftSide: { x: number; y: number }[] = [];
   const rightSide: { x: number; y: number }[] = [];
 

@@ -21,7 +21,9 @@ import {
 } from './geo';
 import {
   SHANGHAI_DIANSHAN_LAKE_WGS84,
+  SHANGHAI_DISHUI_LAKE_WGS84,
   SHANGHAI_DISTRICTS_WGS84,
+  SHANGHAI_HUANGPU_POLY_WGS84,
   SHANGHAI_HUANGPU_WGS84,
   SHANGHAI_SUZHOU_WGS84,
 } from './shanghaiGeoData';
@@ -579,23 +581,34 @@ export function generateCityMap(
     {
       id: 'rv_hp',
       name: '黃浦江',
-      width: 12,
+      width: 7,
+      skipPolylineWaterCheck: true,
       points: huangpuPoints,
     },
     {
       id: 'rv_sz',
       name: '蘇州河',
-      width: 6,
+      width: 1.4,
       points: suzhouPoints,
     },
   ];
 
-  // 3. Inland water bodies (Dianshan Lake in Qingpu)
+  // 3. Exact inland water bodies (Huangpu bank-to-bank polygon, Dianshan Lake, Dishui Lake)
   const waterPolygons = [
+    {
+      id: 'river_huangpu_poly',
+      name: '黃浦江',
+      points: SHANGHAI_HUANGPU_POLY_WGS84.map(([la, lo]) => toWorld(la, lo)),
+    },
     {
       id: 'lake_dianshan',
       name: '澱山湖',
       points: SHANGHAI_DIANSHAN_LAKE_WGS84.map(([la, lo]) => toWorld(la, lo)),
+    },
+    {
+      id: 'lake_dishui',
+      name: '滴水湖',
+      points: SHANGHAI_DISHUI_LAKE_WGS84.map(([la, lo]) => toWorld(la, lo)),
     },
   ];
 
@@ -657,7 +670,8 @@ export function generateCityMap(
       }
       if (!isWater) {
         for (const rv of rivers) {
-          if (distToPolyline(wx, wy, rv.points) <= Math.max(4.5, rv.width * 0.52)) {
+          if (rv.skipPolylineWaterCheck) continue;
+          if (distToPolyline(wx, wy, rv.points) <= rv.width * 0.55) {
             isWater = true;
             break;
           }

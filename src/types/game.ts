@@ -83,6 +83,7 @@ export interface RiverPath {
   name: string;
   width: number;
   widths?: number[];
+  skipPolylineWaterCheck?: boolean;
   points: { x: number; y: number }[];
 }
 
