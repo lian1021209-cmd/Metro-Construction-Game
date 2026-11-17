@@ -1,0 +1,6 @@
+{
+  "name": "MetroForge — 地鐵構築與營運模擬",
+  "description": "超高自由度的無網格地鐵建造、多層地下軌道規劃與動態城市人流營運模擬系統。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
