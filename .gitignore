@@ -2,7 +2,14 @@ node_modules/
 build/
 dist/
 coverage/
+.vite/
+.aistudio/
+public/assets/aistudio/
 .DS_Store
+Thumbs.db
 *.log
+*.tsbuildinfo
 .env*
 !.env.example
+.vscode/
+.idea/
