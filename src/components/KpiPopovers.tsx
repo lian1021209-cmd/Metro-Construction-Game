@@ -10,10 +10,14 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import {
+  ActiveLoan,
+  computeMonthlyInstallmentWan,
   DifficultyConfig,
   FarePolicy,
+  getEffectiveLoanMonthlyRate,
   Language,
   LayerVisibility,
+  LOAN_OFFERS,
   SimulationStats,
 } from '../types/game';
 import { formatCurrencyWan, formatPop, formatRidershipWan, t } from '../i18n/translations';
@@ -27,12 +31,19 @@ interface KpiPopoversProps {
   year: number;
   day: number;
   difficulty: DifficultyConfig;
+  money: number;
+  loans: ActiveLoan[];
+  todCount?: number;
+  totalTodRentWan?: number;
+  onTakeLoan: (offerId: string) => void;
+  onRepayLoan: (loanId: string) => void;
   stats: SimulationStats;
   farePolicy: FarePolicy;
   monthlyCapexWan: number;
   layers: LayerVisibility;
   onToggleLayer: (key: keyof Omit<LayerVisibility, 'depthFilter'>) => void;
   onOpenMetroCoreFares: () => void;
+  onOpenMetroCoreLoans: () => void;
 }
 
 const lightPopover =
@@ -45,12 +56,19 @@ export const KpiPopovers: React.FC<KpiPopoversProps> = ({
   year,
   day,
   difficulty,
+  money,
+  loans,
+  todCount = 0,
+  totalTodRentWan = 0,
+  onTakeLoan,
+  onRepayLoan,
   stats,
   farePolicy,
   monthlyCapexWan,
   layers,
   onToggleLayer,
   onOpenMetroCoreFares,
+  onOpenMetroCoreLoans,
 }) => {
   const [finTab, setFinTab] = useState<'overview' | 'economy' | 'finance'>('overview');
 
@@ -112,6 +130,14 @@ export const KpiPopovers: React.FC<KpiPopoversProps> = ({
                 </span>
               </div>
               <div className="flex justify-between font-mono-tabular">
+                <span className="text-slate-500">
+                  {lang === 'en' ? 'TOD Rent / mo' : `TOD 物業月租 (${todCount}處)`}
+                </span>
+                <span className="text-emerald-700 font-semibold">
+                  +{formatCurrencyWan(totalTodRentWan, lang)}
+                </span>
+              </div>
+              <div className="flex justify-between font-mono-tabular">
                 <span className="text-slate-500">{t(lang, 'opCost')}</span>
                 <span className="text-rose-700 font-semibold">
                   -{formatCurrencyWan(monthlyOp, lang)}
@@ -123,6 +149,19 @@ export const KpiPopovers: React.FC<KpiPopoversProps> = ({
                   -{formatCurrencyWan(monthlyCapexWan, lang)}
                 </span>
               </div>
+              {loans.length > 0 && (
+                <div className="flex justify-between font-mono-tabular pt-1.5 border-t border-slate-200">
+                  <span className="text-slate-500">
+                    {lang === 'en' ? 'Active Debt' : `未償貸款 (${loans.length}筆)`}
+                  </span>
+                  <span className="text-rose-700 font-semibold">
+                    {formatCurrencyWan(
+                      loans.reduce((s, l) => s + l.remainingPrincipalWan, 0),
+                      lang
+                    )}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="p-3 rounded-lg bg-slate-50 border border-slate-200/80 space-y-2 text-xs">
@@ -187,40 +226,119 @@ export const KpiPopovers: React.FC<KpiPopoversProps> = ({
         )}
 
         {finTab === 'finance' && (
-          <div className="p-3 rounded-lg bg-slate-50 border border-slate-200/80 space-y-2 text-xs font-mono-tabular">
-            <div className="flex justify-between">
-              <span className="text-slate-500">{lang === 'en' ? 'Difficulty Tier' : '財政難度'}</span>
-              <span className="text-slate-900 font-medium">{difficulty.label}</span>
+          <div className="space-y-2.5 text-xs">
+            <div className="p-3 rounded-lg bg-slate-50 border border-slate-200/80 space-y-1.5 font-mono-tabular">
+              <div className="flex justify-between">
+                <span className="text-slate-500">{lang === 'en' ? 'Difficulty Tier' : '財政難度'}</span>
+                <span className="text-slate-900 font-medium">{difficulty.label}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">{lang === 'en' ? 'CapEx / OpEx' : '造價 / 維運係數'}</span>
+                <span className="text-slate-800 font-semibold">
+                  {difficulty.costMultiplier.toFixed(2)}x / {difficulty.maintenanceMultiplier.toFixed(2)}x
+                </span>
+              </div>
             </div>
-            <div className="flex justify-between">
-              <span className="text-slate-500">{lang === 'en' ? 'CapEx Multiplier' : '造價係數'}</span>
-              <span className="text-amber-700 font-semibold">{difficulty.costMultiplier.toFixed(2)}x</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-slate-500">{lang === 'en' ? 'OpEx Multiplier' : '維運係數'}</span>
-              <span className="text-blue-700 font-semibold">{difficulty.maintenanceMultiplier.toFixed(2)}x</span>
+
+            <div className="p-3 rounded-lg bg-slate-50 border border-slate-200/80 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-slate-900">
+                  {lang === 'en' ? 'Quick Bank Financing' : '快速融資放款'}
+                </span>
+                <button
+                  onClick={onOpenMetroCoreLoans}
+                  className="text-[11px] font-medium text-blue-700 hover:underline cursor-pointer"
+                >
+                  {lang === 'en' ? 'Full Ledger' : '詳細合約'}
+                </button>
+              </div>
+              <div className="space-y-1.5">
+                {LOAN_OFFERS.map((offer) => {
+                  const maxLoans = 4 + Math.min(4, Math.floor(todCount / 2));
+                  const effRate = getEffectiveLoanMonthlyRate(offer.monthlyRate, todCount);
+                  const mPay = computeMonthlyInstallmentWan(
+                    offer.principalWan,
+                    effRate,
+                    offer.months
+                  );
+                  return (
+                    <div
+                      key={offer.id}
+                      className="p-2 rounded-md bg-white border border-slate-200 flex items-center justify-between gap-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="font-medium text-slate-900 truncate">
+                          {lang === 'en' ? offer.nameEn : offer.name}
+                        </div>
+                        <div className="text-[10px] text-slate-500 font-mono-tabular">
+                          +{formatCurrencyWan(offer.principalWan, lang)} · 月付{' '}
+                          {formatCurrencyWan(mPay, lang)}
+                          {todCount > 0 && (
+                            <span className="text-emerald-700 ml-1">
+                              ({(effRate * 12 * 100).toFixed(1)}%)
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => onTakeLoan(offer.id)}
+                        disabled={loans.length >= maxLoans}
+                        className="px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white text-[11px] font-medium shrink-0 cursor-pointer"
+                      >
+                        {lang === 'en' ? 'Borrow' : '貸款'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              {loans.length > 0 && (
+                <div className="pt-1.5 border-t border-slate-200 space-y-1">
+                  {loans.map((ln) => (
+                    <div
+                      key={ln.id}
+                      className="flex items-center justify-between text-[11px] font-mono-tabular"
+                    >
+                      <span className="text-slate-700 truncate">
+                        {ln.name} · 餘 {ln.monthsRemaining}期
+                      </span>
+                      <button
+                        onClick={() => onRepayLoan(ln.id)}
+                        disabled={money < ln.remainingPrincipalWan}
+                        className="text-blue-700 hover:underline disabled:opacity-40 shrink-0 ml-2 cursor-pointer"
+                      >
+                        清償 {formatCurrencyWan(ln.remainingPrincipalWan, lang)}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
 
-        <button
-          onClick={() => {
-            onClose();
-            onOpenMetroCoreFares();
-          }}
-          className="w-full px-3 py-2.5 rounded-lg bg-slate-100 hover:bg-slate-200/70 border border-slate-200 flex items-center justify-between text-xs transition-colors cursor-pointer"
-        >
-          <span className="flex items-center gap-2 text-slate-800 font-medium">
-            <Ticket className="w-3.5 h-3.5 text-blue-600" />
-            <span>{t(lang, 'fareRule')}</span>
-          </span>
-          <span className="flex items-center gap-1 text-slate-600 font-mono-tabular">
-            <span>
-              ¥{farePolicy.baseFare} {lang === 'en' ? 'base · dist' : '起·按里程'}
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={() => {
+              onClose();
+              onOpenMetroCoreFares();
+            }}
+            className="px-2.5 py-2 rounded-lg bg-slate-100 hover:bg-slate-200/70 border border-slate-200 flex items-center justify-between text-xs transition-colors cursor-pointer"
+          >
+            <span className="flex items-center gap-1.5 text-slate-800 font-medium">
+              <Ticket className="w-3.5 h-3.5 text-blue-600" />
+              <span>{t(lang, 'fareRule')}</span>
             </span>
-            <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-          </span>
-        </button>
+            <span className="text-[11px] text-slate-600 font-mono-tabular">¥{farePolicy.baseFare}起</span>
+          </button>
+
+          <button
+            onClick={onOpenMetroCoreLoans}
+            className="px-2.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white flex items-center justify-between text-xs transition-colors cursor-pointer"
+          >
+            <span className="font-medium">{lang === 'en' ? 'Loans & Debt' : '銀行貸款'}</span>
+            <ChevronRight className="w-3.5 h-3.5 text-slate-300" />
+          </button>
+        </div>
       </div>
     );
   }

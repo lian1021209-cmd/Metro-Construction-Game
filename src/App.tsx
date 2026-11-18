@@ -1,21 +1,29 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActiveLoan,
+  BuildingModel,
   CityMap,
+  computeMonthlyInstallmentWan,
+  computeStationTodMonthlyRentWan,
   DEPTH_LEVELS,
   DIFFICULTIES,
   DifficultyLevel,
   ElevationMode,
   FarePolicy,
+  getEffectiveLoanMonthlyRate,
   HistorySnapshot,
   Language,
   LayerVisibility,
   LINE_PALETTE,
+  LOAN_OFFERS,
   NetworkSnapshot,
   RealCityId,
   SimulationStats,
   Station,
   StationSize,
   STATION_CONFIGS,
+  TOD_CONFIGS,
+  TodPropertyKind,
   ToolMode,
   TrackDepth,
   TrackSegment,
@@ -91,7 +99,11 @@ function cloneSnapshot(
   lines: TransitLine[]
 ): NetworkSnapshot {
   return {
-    stations: stations.map((s) => ({ ...s, waiting: s.waiting.map((w) => ({ ...w })) })),
+    stations: stations.map((s) => ({
+      ...s,
+      waiting: s.waiting.map((w) => ({ ...w })),
+      todProperty: s.todProperty ? { ...s.todProperty } : undefined,
+    })),
     segments: segments.map((seg) => ({ ...seg })),
     lines: lines.map((l) => ({
       ...l,
@@ -334,6 +346,8 @@ export default function App() {
   const [money, setMoney] = useState(DIFFICULTIES.normal.startingMoney);
   const [farePolicy, setFarePolicy] = useState<FarePolicy>(DEFAULT_FARE_POLICY);
   const [monthlyCapexWan, setMonthlyCapexWan] = useState(0);
+  const [loans, setLoans] = useState<ActiveLoan[]>([]);
+  const loansRef = useRef<ActiveLoan[]>([]);
 
   const timeRef = useRef({
     minutes: 14 * 60 + 54,
@@ -449,7 +463,7 @@ export default function App() {
   const [networkMapOpen, setNetworkMapOpen] = useState(false);
   const [metroCoreState, setMetroCoreState] = useState<{
     open: boolean;
-    tab: 'overview' | 'lines' | 'stations' | 'fleet' | 'fares';
+    tab: 'overview' | 'lines' | 'stations' | 'fleet' | 'fares' | 'loans';
   }>({ open: false, tab: 'overview' });
   const [metroCircleOpen, setMetroCircleOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
@@ -489,6 +503,13 @@ export default function App() {
 
   const syncUiSnapshots = useCallback(() => {
     const sim = simDataRef.current;
+    const liveLines = sim.lines.filter((l) => !l.isDraft);
+    for (const st of sim.stations) {
+      if (st.todProperty) {
+        const servingCount = liveLines.filter((l) => l.stationIds.includes(st.id)).length;
+        st.todProperty.monthlyRentWan = computeStationTodMonthlyRentWan(st, servingCount, sim.map);
+      }
+    }
     setStationsSnapshot([...sim.stations]);
     setSegmentsSnapshot([...sim.segments]);
     setLinesSnapshot([...sim.lines]);
@@ -498,6 +519,50 @@ export default function App() {
     setMoney(timeRef.current.money);
     setStats(computeStatsObj(sim));
   }, [computeStatsObj]);
+
+  const settleMonthlyFinances = useCallback(
+    (sim: { map: CityMap; stations: Station[]; lines: TransitLine[] }) => {
+      const liveLines = sim.lines.filter((l) => !l.isDraft);
+      let totalTodRentWan = 0;
+      for (const st of sim.stations) {
+        if (!st.isDraft && st.todProperty) {
+          const servingCount = liveLines.filter((l) => l.stationIds.includes(st.id)).length;
+          const rent = computeStationTodMonthlyRentWan(st, servingCount, sim.map);
+          st.todProperty.monthlyRentWan = rent;
+          totalTodRentWan += rent;
+        }
+      }
+      if (totalTodRentWan > 0) {
+        timeRef.current.money += totalTodRentWan;
+      }
+
+      let totalLoanPaidWan = 0;
+      if (loansRef.current.length > 0) {
+        const nextLoans: ActiveLoan[] = [];
+        for (const ln of loansRef.current) {
+          const interest = Math.round(ln.remainingPrincipalWan * ln.monthlyRate);
+          const payment = Math.min(ln.remainingPrincipalWan + interest, ln.monthlyPaymentWan);
+          const principalPaid = Math.max(0, payment - interest);
+          totalLoanPaidWan += payment;
+          const remPrincipal = Math.max(0, ln.remainingPrincipalWan - principalPaid);
+          const remMonths = ln.monthsRemaining - 1;
+          if (remPrincipal > 0 && remMonths > 0) {
+            nextLoans.push({
+              ...ln,
+              remainingPrincipalWan: remPrincipal,
+              monthsRemaining: remMonths,
+            });
+          }
+        }
+        timeRef.current.money -= totalLoanPaidWan;
+        loansRef.current = nextLoans;
+        setLoans(nextLoans);
+      }
+
+      return { totalTodRentWan, totalLoanPaidWan };
+    },
+    []
+  );
 
   // 60fps simulation loop
   useEffect(() => {
@@ -539,6 +604,14 @@ export default function App() {
               ),
             ]);
             setMonthlyCapexWan(0);
+
+            const { totalTodRentWan, totalLoanPaidWan } = settleMonthlyFinances(sim);
+            if (totalTodRentWan > 0 || totalLoanPaidWan > 0) {
+              const parts: string[] = [];
+              if (totalTodRentWan > 0) parts.push(`TOD 物業收租 +${formatCurrencyWan(totalTodRentWan, lang)}`);
+              if (totalLoanPaidWan > 0) parts.push(`貸款月供 -${formatCurrencyWan(totalLoanPaidWan, lang)}`);
+              showToast(`月度結算：${parts.join(' · ')}`);
+            }
           }
 
           const liveStations = sim.stations.filter((s) => !s.isDraft);
@@ -593,7 +666,7 @@ export default function App() {
 
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);
-  }, [screen, speed, difficulty, farePolicy, computeStatsObj, syncUiSnapshots]);
+  }, [screen, speed, difficulty, farePolicy, lang, computeStatsObj, settleMonthlyFinances, showToast, syncUiSnapshots]);
 
   // Keyboard shortcuts (including T for 2D/2.5D toggle)
   useEffect(() => {
@@ -740,6 +813,17 @@ export default function App() {
       }
       applyDailyUrbanEvolution(sim.map, timeRef.current.day, timeRef.current.year);
     }
+
+    const { totalTodRentWan, totalLoanPaidWan } = settleMonthlyFinances(sim);
+    const financeParts: string[] = [];
+    if (totalTodRentWan > 0) {
+      financeParts.push(`物業收租 +${formatCurrencyWan(totalTodRentWan, lang)}`);
+    }
+    if (totalLoanPaidWan > 0) {
+      financeParts.push(`貸款扣繳 -${formatCurrencyWan(totalLoanPaidWan, lang)}`);
+    }
+    const financeMsg = financeParts.length > 0 ? ` · ${financeParts.join(' · ')}` : '';
+
     const snapStats = computeStatsObj(sim);
     setHistory((prev) => [
       ...prev.slice(-59),
@@ -754,8 +838,76 @@ export default function App() {
     setMonthlyCapexWan(0);
     soundEngine.playUiClick();
     syncUiSnapshots();
-    showToast(`時間推進至 ${timeRef.current.year}年 · 都市演化已更新`);
+    showToast(`時間推進至 ${timeRef.current.year}年 · 都市演化已更新${financeMsg}`);
   };
+
+  const handleTakeLoan = useCallback(
+    (offerId: string) => {
+      const offer = LOAN_OFFERS.find((o) => o.id === offerId);
+      if (!offer) return;
+      const todCount = simDataRef.current.stations.filter((s) => !s.isDraft && s.todProperty).length;
+      const maxLoans = 4 + Math.min(4, Math.floor(todCount / 2));
+      if (loansRef.current.length >= maxLoans) {
+        soundEngine.playError();
+        showToast(`已達授信上限 ${maxLoans} 筆（每開發 2 座 TOD 上蓋物業可擴增 +1 授信額度）`);
+        return;
+      }
+      const effRate = getEffectiveLoanMonthlyRate(offer.monthlyRate, todCount);
+      const monthlyPaymentWan = computeMonthlyInstallmentWan(
+        offer.principalWan,
+        effRate,
+        offer.months
+      );
+      const newLoan: ActiveLoan = {
+        id: `loan_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        offerId: offer.id,
+        name: offer.name,
+        principalWan: offer.principalWan,
+        remainingPrincipalWan: offer.principalWan,
+        monthlyRate: effRate,
+        monthlyPaymentWan,
+        monthsTotal: offer.months,
+        monthsRemaining: offer.months,
+        takenYear: timeRef.current.year,
+        takenDay: timeRef.current.day,
+      };
+      timeRef.current.money += offer.principalWan;
+      const next = [...loansRef.current, newLoan];
+      loansRef.current = next;
+      setLoans(next);
+      soundEngine.playTrackConnected();
+      syncUiSnapshots();
+      const discountNote = todCount > 0 ? ` · 含物業抵押優惠年息 ${(effRate * 12 * 100).toFixed(2)}%` : '';
+      showToast(
+        `已核貸「${offer.name}」+${formatCurrencyWan(offer.principalWan, lang)}（月付 ${formatCurrencyWan(monthlyPaymentWan, lang)}${discountNote}）`
+      );
+    },
+    [lang, showToast, syncUiSnapshots]
+  );
+
+  const handleRepayLoan = useCallback(
+    (loanId: string) => {
+      const target = loansRef.current.find((l) => l.id === loanId);
+      if (!target) return;
+      if (timeRef.current.money < target.remainingPrincipalWan) {
+        soundEngine.playError();
+        showToast(
+          `資金不足，提前清償需 ${formatCurrencyWan(target.remainingPrincipalWan, lang)}`
+        );
+        return;
+      }
+      timeRef.current.money -= target.remainingPrincipalWan;
+      const next = loansRef.current.filter((l) => l.id !== loanId);
+      loansRef.current = next;
+      setLoans(next);
+      soundEngine.playUiClick();
+      syncUiSnapshots();
+      showToast(
+        `已提前清償「${target.name}」本金 ${formatCurrencyWan(target.remainingPrincipalWan, lang)}`
+      );
+    },
+    [lang, showToast, syncUiSnapshots]
+  );
 
   const handlePlaceStation = useCallback(
     (wx: number, wy: number) => {
@@ -1240,6 +1392,116 @@ export default function App() {
     showToast(`${st.name} 已升級為「${newCfg.label}」`);
   };
 
+  const handleDevelopStationTod = useCallback(
+    (stationId: string, kind: TodPropertyKind) => {
+      const sim = simDataRef.current;
+      const st = sim.stations.find((s) => s.id === stationId);
+      if (!st) return;
+      if (st.isDraft) {
+        soundEngine.playError();
+        showToast('請先確認建設（竣工）此車站，再進行 TOD 上蓋物業開發');
+        return;
+      }
+
+      const existing = st.todProperty;
+      const isUpgrade = Boolean(existing);
+      const activeKind = existing ? existing.kind : kind;
+      const cfg = TOD_CONFIGS[activeKind];
+
+      if (existing && existing.level >= 3) {
+        soundEngine.playError();
+        showToast(`「${st.name}」${cfg.label}已擴建至最高 Lv.3`);
+        return;
+      }
+
+      const costWan = Math.round(cfg.costWan * (isUpgrade ? 0.7 : 1) * difficulty.costMultiplier);
+      if (timeRef.current.money < costWan) {
+        soundEngine.playError();
+        showToast(`資金不足，${isUpgrade ? '擴建' : '開發'}${cfg.label}需 ${formatCurrencyWan(costWan, lang)}`);
+        return;
+      }
+
+      timeRef.current.money -= costWan;
+      setMonthlyCapexWan((c) => c + costWan);
+
+      const presaleWan = !isUpgrade ? cfg.presaleRebateWan : 0;
+      if (presaleWan > 0) {
+        timeRef.current.money += presaleWan;
+      }
+
+      const nextLevel = existing ? existing.level + 1 : 1;
+      const liveLines = sim.lines.filter((l) => !l.isDraft);
+      const servingCount = liveLines.filter((l) => l.stationIds.includes(st.id)).length;
+
+      st.todProperty = {
+        kind: activeKind,
+        level: nextLevel,
+        monthlyRentWan: 0,
+        developedYear: existing?.developedYear ?? timeRef.current.year,
+      };
+      const liveRentWan = computeStationTodMonthlyRentWan(st, servingCount, sim.map);
+      st.todProperty.monthlyRentWan = liveRentWan;
+
+      // Boost nearby cells' population, jobs, and land value to generate real metro ridership & higher rents
+      const nearbyCells: { cell: CityMap['cells'][number]; weight: number }[] = [];
+      let totalWeight = 0;
+      for (const cell of sim.map.cells) {
+        if (cell.terrain !== 'land') continue;
+        const cx = (cell.gx + 0.5) * sim.map.cellSize;
+        const cy = (cell.gy + 0.5) * sim.map.cellSize;
+        const d = Math.hypot(cx - st.x, cy - st.y);
+        if (d <= 220) {
+          const w = 1 - d / 240;
+          nearbyCells.push({ cell, weight: w });
+          totalWeight += w;
+        }
+      }
+      if (totalWeight > 0) {
+        const boostFactor = isUpgrade ? 0.65 : 1;
+        for (const { cell, weight } of nearbyCells) {
+          const share = weight / totalWeight;
+          cell.population = Math.min(980, cell.population + cfg.popBoost * boostFactor * share);
+          cell.jobs = Math.min(990, cell.jobs + cfg.jobsBoost * boostFactor * share);
+          cell.landValue = Math.min(3.0, cell.landValue + cfg.landValueBoost * (isUpgrade ? 0.6 : 1) * (0.4 + weight * 0.6));
+        }
+      }
+
+      // Add physical architectural towers around the station for immediate visual feedback on canvas
+      const buildingKind: BuildingModel['kind'] =
+        activeKind === 'office' ? 'cbd' : activeKind === 'retail' ? 'landmark' : 'res';
+      const towerCount = isUpgrade ? 2 : 3;
+      const baseAngle = st.x * 0.03 + st.y * 0.02 + nextLevel * 1.1;
+      for (let i = 0; i < towerCount; i++) {
+        const ang = baseAngle + (i * Math.PI * 2) / towerCount;
+        const dist = 20 + (i % 2) * 10;
+        const bw = activeKind === 'retail' ? 18 : 13;
+        const bd = activeKind === 'retail' ? 16 : 13;
+        const bh = Math.min(94, (activeKind === 'office' ? 68 : activeKind === 'apartment' ? 56 : 44) + nextLevel * 9 + i * 4);
+        sim.map.buildings.push({
+          id: `tod_${st.id}_lv${nextLevel}_${i}_${Date.now()}`,
+          x: Math.round(st.x + Math.cos(ang) * dist - bw / 2),
+          y: Math.round(st.y + Math.sin(ang) * dist - bd / 2),
+          w: bw,
+          d: bd,
+          h: bh,
+          kind: buildingKind,
+          lit: 0.92,
+        });
+      }
+
+      recomputeMapCoverage(sim.map, sim.stations);
+      setMapVersion((v) => v + 1);
+      soundEngine.playTrackConnected();
+      syncUiSnapshots();
+
+      const presaleMsg = presaleWan > 0 ? ` · 預售回款 +${formatCurrencyWan(presaleWan, lang)}` : '';
+      showToast(
+        `${st.name} ${isUpgrade ? '擴建' : '竣工'}「${cfg.label} Lv.${nextLevel}」${presaleMsg} · 月租收益 +${formatCurrencyWan(liveRentWan, lang)}/月`
+      );
+    },
+    [difficulty.costMultiplier, lang, showToast, syncUiSnapshots]
+  );
+
   const handleUnlockDistrict = useCallback(
     (districtId: string) => {
       const sim = simDataRef.current;
@@ -1298,6 +1560,8 @@ export default function App() {
     setDraftPast([]);
     setDraftFuture([]);
     setMonthlyCapexWan(0);
+    loansRef.current = [];
+    setLoans([]);
     setActiveLineId(starterLine.id);
     setSelectedStationId(null);
     setTrackStartStationId(null);
@@ -1406,6 +1670,9 @@ export default function App() {
             onChangeSpeed={setSpeed}
             onAdvanceMonth={handleAdvanceMonth}
             money={money}
+            loans={loans}
+            onTakeLoan={handleTakeLoan}
+            onRepayLoan={handleRepayLoan}
             stats={stats}
             farePolicy={farePolicy}
             monthlyCapexWan={monthlyCapexWan}
@@ -1450,6 +1717,7 @@ export default function App() {
             onClearSelectedStation={() => setSelectedStationId(null)}
             onUpdateStation={handleUpdateStation}
             onUpgradeStation={handleUpgradeStation}
+            onDevelopTod={handleDevelopStationTod}
             onDeleteStation={handleDeleteStation}
             layers={layers}
             onToggleLayer={(key) => setLayers((prev) => ({ ...prev, [key]: !prev[key] }))}
@@ -1556,6 +1824,13 @@ export default function App() {
           setMetroCoreState((s) => ({ ...s, open: false }));
         }}
         onUpgradeStation={handleUpgradeStation}
+        onUpdateStation={handleUpdateStation}
+        onDevelopTod={handleDevelopStationTod}
+        difficulty={difficulty}
+        money={money}
+        loans={loans}
+        onTakeLoan={handleTakeLoan}
+        onRepayLoan={handleRepayLoan}
       />
 
       <MetroCircleModal

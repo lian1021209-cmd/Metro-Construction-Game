@@ -1547,12 +1547,13 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                 );
                 const screenAngle = Math.atan2(ahead.y - sp.y, ahead.x - sp.x);
 
+                const role = train.serviceRole ?? 'local';
+                const trainLen = Math.min(26, 11 + line.carCount * 1.4);
+                const trainW = role === 'short_turn' ? 6.2 : 7.0;
+
                 ctx.save();
                 ctx.translate(sp.x, sp.y);
                 ctx.rotate(screenAngle);
-
-                const trainLen = Math.min(26, 11 + line.carCount * 1.4);
-                const trainW = 6.8;
 
                 if (isDarkMap) {
                   ctx.shadowColor = line.color;
@@ -1560,16 +1561,22 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                 } else {
                   ctx.shadowBlur = 0;
                 }
-                ctx.fillStyle = '#FFFFFF';
+                ctx.fillStyle = role === 'express' ? '#FEF3C7' : role === 'short_turn' ? '#E0F2FE' : '#FFFFFF';
                 ctx.beginPath();
                 ctx.roundRect(-trainLen / 2, -trainW / 2, trainLen, trainW, 3);
                 ctx.fill();
                 ctx.shadowBlur = 0;
-                if (!isDarkMap) {
-                  ctx.strokeStyle = 'rgba(15, 23, 42, 0.45)';
-                  ctx.lineWidth = 0.9;
-                  ctx.stroke();
-                }
+
+                ctx.strokeStyle =
+                  role === 'express'
+                    ? '#D97706'
+                    : role === 'short_turn'
+                    ? '#0284C7'
+                    : isDarkMap
+                    ? 'rgba(255,255,255,0.4)'
+                    : 'rgba(15, 23, 42, 0.45)';
+                ctx.lineWidth = role === 'local' ? 0.9 : 1.3;
+                ctx.stroke();
 
                 const loadRatio = Math.min(1, train.passengers.length / Math.max(1, train.capacity));
                 ctx.fillStyle = line.color;
@@ -1583,6 +1590,16 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                 );
                 ctx.fill();
                 ctx.restore();
+
+                if (zoomRatio > 0.85 && (role === 'express' || role === 'short_turn')) {
+                  ctx.save();
+                  ctx.font = '700 8px "Noto Sans TC", sans-serif';
+                  ctx.textAlign = 'center';
+                  ctx.textBaseline = 'middle';
+                  ctx.fillStyle = role === 'express' ? '#B45309' : '#0369A1';
+                  ctx.fillText(role === 'express' ? '快' : '區', sp.x, sp.y - 9);
+                  ctx.restore();
+                }
               }
             }
 
@@ -1604,6 +1621,15 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
 
               const servingLines = st.lines.filter((l) => l.stationIds.includes(station.id));
               const primaryColor = servingLines[0]?.color ?? '#38BDF8';
+              const hasExpressLine = servingLines.some((l) => l.serviceMode === 'express');
+
+              if (hasExpressLine && (station.isExpressStop || station.size === 'hub' || station.size === 'mall')) {
+                ctx.beginPath();
+                ctx.arc(sx, sy, rad + 3, 0, Math.PI * 2);
+                ctx.strokeStyle = 'rgba(217, 119, 6, 0.85)';
+                ctx.lineWidth = 1.6;
+                ctx.stroke();
+              }
 
               if (station.congestionLoad > 0.85) {
                 ctx.beginPath();
@@ -1663,6 +1689,28 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                   ctx.arc(sx + rad + 5 + col * 4.5, sy - 5 + row * 5, 1.8, 0, Math.PI * 2);
                   ctx.fill();
                 }
+              }
+
+              if (station.todProperty && zoomRatio > 0.65) {
+                const tod = station.todProperty;
+                const badgeText = tod.kind === 'retail' ? '商' : tod.kind === 'office' ? '辦' : '住';
+                const badgeBg = tod.kind === 'retail' ? '#D97706' : tod.kind === 'office' ? '#1D4ED8' : '#047857';
+                const bx = sx - rad - 13;
+                const by = sy - rad - 5;
+                ctx.save();
+                ctx.fillStyle = badgeBg;
+                ctx.beginPath();
+                ctx.roundRect(bx, by, 14, 13, 3);
+                ctx.fill();
+                ctx.strokeStyle = '#FFFFFF';
+                ctx.lineWidth = 1;
+                ctx.stroke();
+                ctx.fillStyle = '#FFFFFF';
+                ctx.font = '700 8.5px "Noto Sans TC", sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(badgeText, bx + 7, by + 6.5);
+                ctx.restore();
               }
 
               if (zoomRatio > 0.62 || isSelected || isHovered || servingLines.length >= 2 || station.isDraft) {

@@ -138,6 +138,15 @@ export interface WaitingPassenger {
   patience: number; // 0..100
 }
 
+export type TodPropertyKind = 'retail' | 'office' | 'apartment';
+
+export interface TodProperty {
+  kind: TodPropertyKind;
+  level: number; // 1..3
+  monthlyRentWan: number; // dynamic monthly rental cashflow in 萬元
+  developedYear: number;
+}
+
 export interface Station {
   id: string;
   name: string;
@@ -156,6 +165,7 @@ export interface Station {
   boardedTotal: number;
   alightedTotal: number;
   congestionLoad: number; // 0..1+
+  todProperty?: TodProperty;
   isDraft?: boolean;
 }
 
@@ -194,6 +204,7 @@ export interface Train {
   x: number;
   y: number;
   angle: number;
+  serviceRole?: 'local' | 'express' | 'short_turn';
 }
 
 export interface TransitLine {
@@ -204,6 +215,10 @@ export interface TransitLine {
   stationIds: string[];
   segmentIds: string[];
   serviceMode: ServiceMode;
+  expressPattern?: 'mixed' | 'express_only';
+  shortTurnMode?: 'mixed' | 'short_only';
+  shortTurnStartId?: string | null;
+  shortTurnEndId?: string | null;
   headwayMin: number; // 2..20 min
   carCount: number; // 2..12 cars
   fare: number; // legacy line modifier (100% default multiplier or flat fallback)
@@ -417,3 +432,146 @@ export const LINE_PALETTE = [
   '#14B8A6', // Teal
   '#EC4899', // Magenta
 ];
+
+export interface LoanOffer {
+  id: string;
+  name: string;
+  nameEn: string;
+  principalWan: number; // in 萬元 (e.g. 50000 = 5億元)
+  monthlyRate: number; // e.g. 0.0035 (0.35% / month = 4.2% APR)
+  months: number;
+  note: string;
+}
+
+export interface ActiveLoan {
+  id: string;
+  offerId: string;
+  name: string;
+  principalWan: number;
+  remainingPrincipalWan: number;
+  monthlyRate: number;
+  monthlyPaymentWan: number;
+  monthsTotal: number;
+  monthsRemaining: number;
+  takenYear: number;
+  takenDay: number;
+}
+
+export function computeMonthlyInstallmentWan(
+  principalWan: number,
+  monthlyRate: number,
+  months: number
+): number {
+  if (monthlyRate <= 0 || months <= 0) return Math.ceil(principalWan / Math.max(1, months));
+  const pow = Math.pow(1 + monthlyRate, months);
+  return Math.round((principalWan * (monthlyRate * pow)) / (pow - 1));
+}
+
+export const TOD_CONFIGS: Record<
+  TodPropertyKind,
+  {
+    id: TodPropertyKind;
+    label: string;
+    shortBadge: string;
+    costWan: number;
+    presaleRebateWan: number;
+    baseMonthlyRentWan: number;
+    jobsBoost: number;
+    popBoost: number;
+    landValueBoost: number;
+    desc: string;
+  }
+> = {
+  retail: {
+    id: 'retail',
+    label: '地鐵商業廣場',
+    shortBadge: '商',
+    costWan: 18000, // 1.80 億元
+    presaleRebateWan: 0,
+    baseMonthlyRentWan: 2450,
+    jobsBoost: 650,
+    popBoost: 120,
+    landValueBoost: 0.35,
+    desc: '車站直連商場，穩定月收租並吸引商業客流',
+  },
+  office: {
+    id: 'office',
+    label: 'TOD 寫字樓綜合體',
+    shortBadge: '辦',
+    costWan: 28000, // 2.80 億元
+    presaleRebateWan: 0,
+    baseMonthlyRentWan: 3850,
+    jobsBoost: 1150,
+    popBoost: 80,
+    landValueBoost: 0.45,
+    desc: '高租金商辦塔樓，多線換乘站收益大幅倍增',
+  },
+  apartment: {
+    id: 'apartment',
+    label: '上蓋住宅社區',
+    shortBadge: '住',
+    costWan: 22000, // 2.20 億元
+    presaleRebateWan: 6500, // 竣工預售回款 0.65 億元
+    baseMonthlyRentWan: 1950,
+    jobsBoost: 150,
+    popBoost: 1450,
+    landValueBoost: 0.3,
+    desc: '竣工即享預售回款，持續導入大量早晚通勤客源',
+  },
+};
+
+export function computeStationTodMonthlyRentWan(
+  station: Station,
+  servingLineCount: number,
+  map: CityMap
+): number {
+  if (!station.todProperty) return 0;
+  const cfg = TOD_CONFIGS[station.todProperty.kind];
+  const levelMult = 1 + (station.todProperty.level - 1) * 0.65;
+  const paxFactor = 1 + Math.min(0.7, (station.boardedTotal + station.alightedTotal) / 220000);
+  const transferFactor = 1 + Math.max(0, servingLineCount - 1) * 0.22;
+
+  const gx = Math.min(map.cols - 1, Math.max(0, Math.floor(station.x / map.cellSize)));
+  const gy = Math.min(map.rows - 1, Math.max(0, Math.floor(station.y / map.cellSize)));
+  const cell = map.cells[gy * map.cols + gx];
+  const landMult = cell ? 0.65 + cell.landValue * 0.35 : 1.0;
+
+  return Math.round(cfg.baseMonthlyRentWan * levelMult * paxFactor * transferFactor * landMult);
+}
+
+export function getEffectiveLoanMonthlyRate(baseMonthlyRate: number, todCount: number): number {
+  // Each TOD property acts as real-estate collateral, discounting monthly interest up to 0.15% (1.8% APR)
+  const discount = Math.min(0.0015, todCount * 0.0003);
+  return Math.max(0.0015, Number((baseMonthlyRate - discount).toFixed(5)));
+}
+
+export const LOAN_OFFERS: LoanOffer[] = [
+  {
+    id: 'short_credit',
+    name: '營運周轉短貸',
+    nameEn: 'Working Capital Loan',
+    principalWan: 50000, // 5.00 億元
+    monthlyRate: 0.0035, // 4.2% 年息
+    months: 12,
+    note: '低門檻快速調度資金，12 個月本息攤還',
+  },
+  {
+    id: 'infra_loan',
+    name: '軌道基建專案貸',
+    nameEn: 'Metro CapEx Facility',
+    principalWan: 150000, // 15.00 億元
+    monthlyRate: 0.0045, // 5.4% 年息
+    months: 24,
+    note: '適合擴建跨江線路與上蓋商辦物業，24 期償還',
+  },
+  {
+    id: 'municipal_bond',
+    name: 'TOD 開發專項債券',
+    nameEn: 'TOD Transit Bond',
+    principalWan: 350000, // 35.00 億元
+    monthlyRate: 0.005, // 6.0% 年息
+    months: 36,
+    note: '大宗站城一體開發融資，36 期長年限低壓分攤',
+  },
+];
+

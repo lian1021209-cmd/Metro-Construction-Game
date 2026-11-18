@@ -7,27 +7,36 @@ import {
   AlertTriangle,
   ArrowLeftRight,
   Zap,
+  Building2,
 } from 'lucide-react';
 import {
+  ActiveLoan,
   CityMap,
+  computeMonthlyInstallmentWan,
+  DifficultyConfig,
   FarePolicy,
+  getEffectiveLoanMonthlyRate,
   HistorySnapshot,
   Language,
   LINE_PALETTE,
+  LOAN_OFFERS,
   ServiceMode,
   SimulationStats,
   Station,
   StationSize,
   STATION_CONFIGS,
+  TOD_CONFIGS,
+  TodPropertyKind,
   TrackSegment,
   TransitLine,
 } from '../types/game';
 import { computeProgressiveFare, pixelsToKm } from '../engine/simulation';
-import { formatRidershipWan, t } from '../i18n/translations';
+import { getShortTurnRange, isStationExpressStop } from '../engine/pathfinding';
+import { formatCurrencyWan, formatRidershipWan, t } from '../i18n/translations';
 
 interface MetroCoreModalProps {
   open: boolean;
-  initialTab?: 'overview' | 'lines' | 'stations' | 'fleet' | 'fares';
+  initialTab?: 'overview' | 'lines' | 'stations' | 'fleet' | 'fares' | 'loans';
   onClose: () => void;
   lang: Language;
   map: CityMap;
@@ -47,6 +56,13 @@ interface MetroCoreModalProps {
   onDeleteLine: (id: string) => void;
   onFocusStation: (station: Station) => void;
   onUpgradeStation: (id: string, newSize: StationSize) => void;
+  onUpdateStation: (id: string, patch: Partial<Station>) => void;
+  onDevelopTod: (stationId: string, kind: TodPropertyKind) => void;
+  difficulty?: DifficultyConfig;
+  money: number;
+  loans: ActiveLoan[];
+  onTakeLoan: (offerId: string) => void;
+  onRepayLoan: (loanId: string) => void;
 }
 
 export const MetroCoreModal: React.FC<MetroCoreModalProps> = ({
@@ -71,8 +87,15 @@ export const MetroCoreModal: React.FC<MetroCoreModalProps> = ({
   onDeleteLine,
   onFocusStation,
   onUpgradeStation,
+  onUpdateStation,
+  onDevelopTod,
+  difficulty,
+  money,
+  loans,
+  onTakeLoan,
+  onRepayLoan,
 }) => {
-  const [tab, setTab] = useState<'overview' | 'lines' | 'stations' | 'fleet' | 'fares'>(initialTab);
+  const [tab, setTab] = useState<'overview' | 'lines' | 'stations' | 'fleet' | 'fares' | 'loans'>(initialTab);
   const [chartMetric, setChartMetric] = useState<'ridership' | 'share' | 'satisfaction'>('ridership');
   const [autoAlert, setAutoAlert] = useState(true);
 
@@ -139,6 +162,7 @@ export const MetroCoreModal: React.FC<MetroCoreModalProps> = ({
                   { id: 'stations', label: t(lang, 'mcStations'), count: liveStations.length },
                   { id: 'fleet', label: t(lang, 'mcFleet'), count: totalTrains },
                   { id: 'fares', label: t(lang, 'mcFares'), count: null },
+                  { id: 'loans', label: lang === 'en' ? 'Bank Loans' : '銀行貸款', count: loans.length > 0 ? loans.length : null },
                 ] as const
               ).map((item) => (
                 <button
@@ -192,6 +216,7 @@ export const MetroCoreModal: React.FC<MetroCoreModalProps> = ({
               {tab === 'stations' && t(lang, 'mcStations')}
               {tab === 'fleet' && t(lang, 'mcFleet')}
               {tab === 'fares' && t(lang, 'mcFares')}
+              {tab === 'loans' && (lang === 'en' ? 'Bank Loans & Transit Bonds' : '銀行貸款與專項債券')}
             </h2>
             <div className="flex items-center gap-4">
               <span className="text-xs text-slate-500 font-mono-tabular">
@@ -490,7 +515,7 @@ export const MetroCoreModal: React.FC<MetroCoreModalProps> = ({
                       {(
                         [
                           { id: 'local', label: lang === 'en' ? 'Local' : '站站停' },
-                          { id: 'express', label: lang === 'en' ? 'Express' : '快車跳站' },
+                          { id: 'express', label: lang === 'en' ? 'Express + Local' : '快慢車' },
                           { id: 'short_turn', label: lang === 'en' ? 'Short-turn' : '區間車' },
                           { id: 'through', label: lang === 'en' ? 'Through' : '貫通運轉' },
                         ] as { id: ServiceMode; label: string }[]
@@ -498,7 +523,7 @@ export const MetroCoreModal: React.FC<MetroCoreModalProps> = ({
                         <button
                           key={m.id}
                           onClick={() => onUpdateLine(activeLine.id, { serviceMode: m.id })}
-                          className={`py-2 px-3 rounded-lg text-xs font-semibold border transition-colors ${
+                          className={`py-2 px-3 rounded-lg text-xs font-semibold border transition-colors cursor-pointer ${
                             activeLine.serviceMode === m.id
                               ? 'bg-slate-900 border-slate-900 text-white'
                               : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
@@ -508,6 +533,234 @@ export const MetroCoreModal: React.FC<MetroCoreModalProps> = ({
                         </button>
                       ))}
                     </div>
+
+                    {activeLine.serviceMode === 'express' && (() => {
+                      const orderedStations = activeLine.stationIds
+                        .map((id) => stations.find((s) => s.id === id))
+                        .filter((s): s is Station => Boolean(s));
+                      const pattern = activeLine.expressPattern ?? 'mixed';
+                      return (
+                        <div className="p-3.5 rounded-lg bg-amber-50/70 border border-amber-200/90 space-y-3 text-xs">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="font-semibold text-amber-950">
+                              {lang === 'en' ? 'Express Dispatch Pattern' : '快慢車排班模式'}
+                            </span>
+                            <div className="flex items-center gap-1 bg-white p-0.5 rounded-md border border-amber-200">
+                              <button
+                                onClick={() =>
+                                  onUpdateLine(activeLine.id, { expressPattern: 'mixed' })
+                                }
+                                className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer ${
+                                  pattern === 'mixed'
+                                    ? 'bg-slate-900 text-white'
+                                    : 'text-slate-600 hover:text-slate-950'
+                                }`}
+                              >
+                                {lang === 'en' ? 'Express + Local' : '快慢車混跑 (1快1慢)'}
+                              </button>
+                              <button
+                                onClick={() =>
+                                  onUpdateLine(activeLine.id, { expressPattern: 'express_only' })
+                                }
+                                className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer ${
+                                  pattern === 'express_only'
+                                    ? 'bg-slate-900 text-white'
+                                    : 'text-slate-600 hover:text-slate-950'
+                                }`}
+                              >
+                                {lang === 'en' ? 'Express Only' : '全線大站快車'}
+                              </button>
+                            </div>
+                          </div>
+
+                          <p className="text-[11px] text-amber-900/80 leading-relaxed">
+                            {pattern === 'mixed'
+                              ? '奇數班次為高速「快車」（跳過一般小站），偶數班次為「慢車」（站站皆停），小站乘客仍可乘慢車至樞紐換乘快車。'
+                              : '本路線所有列車均為跳站快車，僅停靠首末站、大型樞紐及下方勾選的快車停靠站。'}
+                          </p>
+
+                          {orderedStations.length > 0 && (
+                            <div className="space-y-1.5">
+                              <div className="text-[11px] font-semibold text-amber-950">
+                                沿線快車停靠站設定（點擊切換）
+                              </div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {orderedStations.map((st, idx) => {
+                                  const isTerminal =
+                                    idx === 0 || idx === orderedStations.length - 1;
+                                  const isHubTier = st.size === 'hub' || st.size === 'mall';
+                                  const locked = isTerminal || isHubTier;
+                                  const isStop = isStationExpressStop(
+                                    st,
+                                    idx,
+                                    orderedStations.length
+                                  );
+                                  return (
+                                    <button
+                                      key={st.id}
+                                      disabled={locked}
+                                      onClick={() =>
+                                        onUpdateStation(st.id, { isExpressStop: !st.isExpressStop })
+                                      }
+                                      className={`px-2.5 py-1 rounded-md text-[11px] border flex items-center gap-1.5 transition-colors ${
+                                        locked
+                                          ? 'bg-amber-100/80 border-amber-300 text-amber-950 cursor-default'
+                                          : isStop
+                                          ? 'bg-slate-900 border-slate-900 text-white cursor-pointer'
+                                          : 'bg-white border-slate-200 text-slate-600 hover:border-amber-400 cursor-pointer'
+                                      }`}
+                                    >
+                                      <span className="font-medium">{st.name}</span>
+                                      <span className="text-[10px] opacity-75">
+                                        {isTerminal
+                                          ? '端點必停'
+                                          : isHubTier
+                                          ? '樞紐必停'
+                                          : isStop
+                                          ? '快車停'
+                                          : '跳站'}
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
+                    {activeLine.serviceMode === 'short_turn' && (() => {
+                      const orderedStations = activeLine.stationIds
+                        .map((id) => stations.find((s) => s.id === id))
+                        .filter((s): s is Station => Boolean(s));
+                      const orderedIds = orderedStations.map((s) => s.id);
+                      const [stStartIdx, stEndIdx] = getShortTurnRange(activeLine, orderedIds);
+                      const curStartId = orderedIds[stStartIdx] ?? '';
+                      const curEndId = orderedIds[stEndIdx] ?? '';
+                      const stMode = activeLine.shortTurnMode ?? 'mixed';
+
+                      return (
+                        <div className="p-3.5 rounded-lg bg-sky-50/75 border border-sky-200/90 space-y-3 text-xs">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="font-semibold text-sky-950">
+                              {lang === 'en' ? 'Short-Turn Zone Pattern' : '大小交路／區間車設定'}
+                            </span>
+                            <div className="flex items-center gap-1 bg-white p-0.5 rounded-md border border-sky-200">
+                              <button
+                                onClick={() =>
+                                  onUpdateLine(activeLine.id, { shortTurnMode: 'mixed' })
+                                }
+                                className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer ${
+                                  stMode === 'mixed'
+                                    ? 'bg-slate-900 text-white'
+                                    : 'text-slate-600 hover:text-slate-950'
+                                }`}
+                              >
+                                {lang === 'en' ? 'Main + Short-Turn' : '大小交路混跑 (推薦)'}
+                              </button>
+                              <button
+                                onClick={() =>
+                                  onUpdateLine(activeLine.id, { shortTurnMode: 'short_only' })
+                                }
+                                className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors cursor-pointer ${
+                                  stMode === 'short_only'
+                                    ? 'bg-slate-900 text-white'
+                                    : 'text-slate-600 hover:text-slate-950'
+                                }`}
+                              >
+                                {lang === 'en' ? 'Short-Turn Only' : '僅運行區間段'}
+                              </button>
+                            </div>
+                          </div>
+
+                          <p className="text-[11px] text-sky-900/80 leading-relaxed">
+                            {stMode === 'mixed'
+                              ? '偶數班次跑全線大交路，奇數班次僅在下方指定的「區間起訖站」折返加密發車，適合核心繁忙段疏運。'
+                              : '所有列車僅在指定的兩座區間折返站之間往返運行，不會駛出區間段。'}
+                          </p>
+
+                          {orderedStations.length >= 2 ? (
+                            <>
+                              <div className="grid grid-cols-2 gap-2.5">
+                                <div>
+                                  <div className="text-[11px] text-sky-900 font-medium mb-1">
+                                    區間起點站
+                                  </div>
+                                  <select
+                                    value={curStartId}
+                                    onChange={(e) =>
+                                      onUpdateLine(activeLine.id, {
+                                        shortTurnStartId: e.target.value,
+                                        shortTurnEndId: curEndId,
+                                      })
+                                    }
+                                    className="w-full bg-white border border-sky-200 rounded-md px-2.5 py-1.5 text-xs text-slate-900 cursor-pointer"
+                                  >
+                                    {orderedStations.map((st, i) => (
+                                      <option key={st.id} value={st.id} disabled={st.id === curEndId}>
+                                        {i + 1}. {st.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div>
+                                  <div className="text-[11px] text-sky-900 font-medium mb-1">
+                                    區間終點站
+                                  </div>
+                                  <select
+                                    value={curEndId}
+                                    onChange={(e) =>
+                                      onUpdateLine(activeLine.id, {
+                                        shortTurnStartId: curStartId,
+                                        shortTurnEndId: e.target.value,
+                                      })
+                                    }
+                                    className="w-full bg-white border border-sky-200 rounded-md px-2.5 py-1.5 text-xs text-slate-900 cursor-pointer"
+                                  >
+                                    {orderedStations.map((st, i) => (
+                                      <option
+                                        key={st.id}
+                                        value={st.id}
+                                        disabled={st.id === curStartId}
+                                      >
+                                        {i + 1}. {st.name}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-1 pt-1">
+                                {orderedStations.map((st, idx) => {
+                                  const inZone = idx >= stStartIdx && idx <= stEndIdx;
+                                  const isTurnback = idx === stStartIdx || idx === stEndIdx;
+                                  return (
+                                    <span
+                                      key={st.id}
+                                      className={`px-2 py-0.5 rounded text-[11px] border ${
+                                        isTurnback
+                                          ? 'bg-sky-700 border-sky-700 text-white font-semibold'
+                                          : inZone
+                                          ? 'bg-sky-100 border-sky-300 text-sky-950 font-medium'
+                                          : 'bg-white border-slate-200 text-slate-400'
+                                      }`}
+                                    >
+                                      {st.name}
+                                      {isTurnback ? ' (折返)' : ''}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            </>
+                          ) : (
+                            <div className="text-[11px] text-sky-800">
+                              請先為此路線連接至少 2 座車站，即可指定區間折返段。
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {activeLine.serviceMode === 'through' && (
                       <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 space-y-1.5 text-xs">
@@ -583,6 +836,7 @@ export const MetroCoreModal: React.FC<MetroCoreModalProps> = ({
                       <th className="py-2.5 px-3 font-semibold">{lang === 'en' ? 'Tier' : '規模'}</th>
                       <th className="py-2.5 px-3 font-semibold">{lang === 'en' ? 'Elevation' : '標高'}</th>
                       <th className="py-2.5 px-3 font-semibold">{lang === 'en' ? 'Waiting / Load' : '候車 / 負荷'}</th>
+                      <th className="py-2.5 px-3 font-semibold">TOD 上蓋物業</th>
                       <th className="py-2.5 px-3 text-right font-semibold">{lang === 'en' ? 'Actions' : '操作'}</th>
                     </tr>
                   </thead>
@@ -596,6 +850,16 @@ export const MetroCoreModal: React.FC<MetroCoreModalProps> = ({
                         </td>
                         <td className="py-2.5 px-3 text-slate-700">
                           {st.waiting.length} · {Math.round(st.congestionLoad * 100)}%
+                        </td>
+                        <td className="py-2.5 px-3">
+                          {st.todProperty ? (
+                            <span className="text-emerald-700 font-semibold">
+                              {TOD_CONFIGS[st.todProperty.kind].shortBadge} Lv.{st.todProperty.level} · +
+                              {formatCurrencyWan(st.todProperty.monthlyRentWan, lang)}/月
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">未開發</span>
+                          )}
                         </td>
                         <td className="py-2.5 px-3 text-right space-x-2">
                           <button
@@ -747,6 +1011,306 @@ export const MetroCoreModal: React.FC<MetroCoreModalProps> = ({
                 </div>
               </div>
             )}
+
+            {tab === 'loans' && (() => {
+              const costMult = difficulty?.costMultiplier ?? 1;
+              const todStations = liveStations.filter((s) => s.todProperty);
+              const undevelopedStations = [...liveStations]
+                .filter((s) => !s.todProperty)
+                .sort((a, b) => (b.boardedTotal + b.alightedTotal) - (a.boardedTotal + a.alightedTotal));
+              const todCount = todStations.length;
+              const maxLoans = 4 + Math.min(4, Math.floor(todCount / 2));
+              const totalTodRentWan = todStations.reduce(
+                (s, st) => s + (st.todProperty?.monthlyRentWan ?? 0),
+                0
+              );
+              const totalDebtWan = loans.reduce((s, l) => s + l.remainingPrincipalWan, 0);
+              const totalMonthlyPaymentWan = loans.reduce((s, l) => s + l.monthlyPaymentWan, 0);
+              const netMonthlyTodCashflow = totalTodRentWan - totalMonthlyPaymentWan;
+              const aprDiscountPct = (Math.min(0.0015, todCount * 0.0003) * 12 * 100).toFixed(2);
+
+              return (
+                <div className="space-y-5 text-xs">
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div className="p-4 rounded-xl bg-white border border-slate-200">
+                      <div className="text-[11px] text-slate-500">目前可用資金</div>
+                      <div className="text-xl font-bold font-mono-tabular text-slate-950 mt-1">
+                        {formatCurrencyWan(money, lang)}
+                      </div>
+                    </div>
+                    <div className="p-4 rounded-xl bg-white border border-slate-200">
+                      <div className="text-[11px] text-slate-500">
+                        未償貸款本金 ({loans.length}/{maxLoans} 筆)
+                      </div>
+                      <div className="text-xl font-bold font-mono-tabular text-rose-700 mt-1">
+                        {formatCurrencyWan(totalDebtWan, lang)}
+                      </div>
+                    </div>
+                    <div className="p-4 rounded-xl bg-white border border-slate-200">
+                      <div className="text-[11px] text-slate-500">每月自動扣繳本息</div>
+                      <div className="text-xl font-bold font-mono-tabular text-amber-700 mt-1">
+                        {formatCurrencyWan(totalMonthlyPaymentWan, lang)} / 月
+                      </div>
+                      {todCount > 0 && (
+                        <div className="text-[10px] text-emerald-700 font-medium mt-0.5">
+                          TOD 資產抵押折減年息 -{aprDiscountPct}%
+                        </div>
+                      )}
+                    </div>
+                    <div className="p-4 rounded-xl bg-white border border-slate-200">
+                      <div className="text-[11px] text-slate-500">TOD 物業月租與還貸淨現金流</div>
+                      <div
+                        className={`text-xl font-bold font-mono-tabular mt-1 ${
+                          netMonthlyTodCashflow >= 0 ? 'text-emerald-700' : 'text-amber-700'
+                        }`}
+                      >
+                        {netMonthlyTodCashflow >= 0 ? '+' : ''}
+                        {formatCurrencyWan(netMonthlyTodCashflow, lang)} / 月
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-mono-tabular mt-0.5">
+                        物業租金 +{formatCurrencyWan(totalTodRentWan, lang)} ({todCount}處)
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-semibold text-slate-900">可申請融資方案（借貸開發上蓋物業收租）</div>
+                      <span className="text-[11px] text-slate-500">
+                        每開發 2 座上蓋物業：授信上限 +1 筆 · 利率 -0.72%（最高折減 1.8%）
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      {LOAN_OFFERS.map((offer) => {
+                        const effRate = getEffectiveLoanMonthlyRate(offer.monthlyRate, todCount);
+                        const monthlyPay = computeMonthlyInstallmentWan(
+                          offer.principalWan,
+                          effRate,
+                          offer.months
+                        );
+                        const totalInterest = monthlyPay * offer.months - offer.principalWan;
+                        const aprPct = (effRate * 12 * 100).toFixed(2);
+                        const baseAprPct = (offer.monthlyRate * 12 * 100).toFixed(1);
+                        return (
+                          <div
+                            key={offer.id}
+                            className="p-4 rounded-xl bg-white border border-slate-200 flex flex-col justify-between gap-4"
+                          >
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm font-bold text-slate-950">
+                                  {lang === 'en' ? offer.nameEn : offer.name}
+                                </span>
+                                <span className="text-[11px] font-mono-tabular text-blue-700 font-semibold">
+                                  {todCount > 0 ? (
+                                    <>
+                                      <span className="line-through text-slate-400 mr-1">{baseAprPct}%</span>
+                                      <span className="text-emerald-700">年息 {aprPct}%</span>
+                                    </>
+                                  ) : (
+                                    `年息 ${baseAprPct}%`
+                                  )}
+                                </span>
+                              </div>
+                              <div className="text-2xl font-bold font-mono-tabular text-slate-950">
+                                {formatCurrencyWan(offer.principalWan, lang)}
+                              </div>
+                              <p className="text-[11px] text-slate-500 leading-relaxed">
+                                {offer.note}
+                              </p>
+                              <div className="pt-2 border-t border-slate-100 space-y-1 font-mono-tabular text-[11px]">
+                                <div className="flex justify-between">
+                                  <span className="text-slate-500">還款期限</span>
+                                  <span className="text-slate-800">{offer.months} 個月</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-slate-500">每月等額本息</span>
+                                  <span className="text-slate-900 font-semibold">
+                                    {formatCurrencyWan(monthlyPay, lang)}
+                                  </span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-slate-500">總利息成本</span>
+                                  <span className="text-amber-700">
+                                    {formatCurrencyWan(totalInterest, lang)}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <button
+                              onClick={() => onTakeLoan(offer.id)}
+                              disabled={loans.length >= maxLoans}
+                              className="w-full py-2 rounded-lg bg-slate-950 hover:bg-slate-800 disabled:opacity-40 text-white text-xs font-semibold transition-colors cursor-pointer"
+                            >
+                              {loans.length >= maxLoans ? `已達 ${maxLoans} 筆授信上限` : '立即申請放款'}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 車站上蓋物業投資組合（地產反哺還貸） */}
+                  <div className="p-4 rounded-xl bg-white border border-slate-200 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+                        <Building2 className="w-4 h-4 text-amber-600" />
+                        <span>車站上蓋物業投資組合（軌道＋物業以租還貸）</span>
+                      </div>
+                      <span className="text-[11px] text-slate-500">
+                        多線換乘與高客流車站租金加成更高，並帶動周邊人口與就業生成客流
+                      </span>
+                    </div>
+
+                    {todStations.length > 0 && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                        {todStations.map((st) => {
+                          const tod = st.todProperty!;
+                          const cfg = TOD_CONFIGS[tod.kind];
+                          const upCost = Math.round(cfg.costWan * 0.7 * costMult);
+                          return (
+                            <div
+                              key={st.id}
+                              className="p-3 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-between gap-3"
+                            >
+                              <div className="min-w-0">
+                                <div className="font-semibold text-slate-900 truncate">
+                                  {st.name} · {cfg.label} Lv.{tod.level}
+                                </div>
+                                <div className="text-[11px] font-mono-tabular text-emerald-700 font-semibold mt-0.5">
+                                  月租 +{formatCurrencyWan(tod.monthlyRentWan, lang)} / 月
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {tod.level < 3 && (
+                                  <button
+                                    onClick={() => onDevelopTod(st.id, tod.kind)}
+                                    className="px-2.5 py-1.5 rounded bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-medium font-mono-tabular cursor-pointer"
+                                  >
+                                    擴建 Lv.{tod.level + 1} ({formatCurrencyWan(upCost, lang)})
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => {
+                                    onFocusStation(st);
+                                    onClose();
+                                  }}
+                                  className="px-2 py-1.5 rounded bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 text-[11px] font-medium cursor-pointer"
+                                >
+                                  定位
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {undevelopedStations.length === 0 && todStations.length === 0 ? (
+                      <div className="py-4 text-center text-slate-400">
+                        請先在地圖建立並竣工車站，即可在此配置上蓋物業收租還貸。
+                      </div>
+                    ) : undevelopedStations.length > 0 ? (
+                      <div className="space-y-2 pt-1">
+                        <div className="text-[11px] font-semibold text-slate-600">
+                          可立即開發上蓋之已竣工車站（依客流排序）
+                        </div>
+                        <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden">
+                          {undevelopedStations.slice(0, 6).map((st) => {
+                            const serving = liveLines.filter((l) => l.stationIds.includes(st.id)).length;
+                            return (
+                              <div
+                                key={st.id}
+                                className="p-2.5 bg-white hover:bg-slate-50 flex flex-wrap items-center justify-between gap-2"
+                              >
+                                <div className="min-w-0">
+                                  <div className="font-semibold text-slate-900">
+                                    {st.name}
+                                    <span className="ml-2 text-[10px] font-mono-tabular text-slate-500 font-normal">
+                                      {serving}線 · 累計客流 {(st.boardedTotal + st.alightedTotal).toLocaleString()}
+                                    </span>
+                                  </div>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  {(['retail', 'office', 'apartment'] as TodPropertyKind[]).map((kind) => {
+                                    const cfg = TOD_CONFIGS[kind];
+                                    const devCost = Math.round(cfg.costWan * costMult);
+                                    return (
+                                      <button
+                                        key={kind}
+                                        onClick={() => onDevelopTod(st.id, kind)}
+                                        className="px-2 py-1 rounded border border-slate-200 bg-white hover:border-amber-500 hover:bg-amber-50/50 text-[11px] font-mono-tabular text-slate-800 cursor-pointer"
+                                        title={cfg.desc}
+                                      >
+                                        {kind === 'retail' ? '商場' : kind === 'office' ? '寫字樓' : '住宅'}{' '}
+                                        {formatCurrencyWan(devCost, lang)}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-white border border-slate-200 space-y-3">
+                    <div className="text-sm font-semibold text-slate-900">進行中貸款合約</div>
+                    {loans.length === 0 ? (
+                      <div className="py-6 text-center text-slate-400">
+                        目前無任何未清償貸款，軌道建設均以自有資金支應。
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead className="text-slate-500 bg-slate-50 border-b border-slate-200">
+                            <tr>
+                              <th className="py-2 px-3 font-semibold">方案名稱</th>
+                              <th className="py-2 px-3 font-semibold">申貸時間</th>
+                              <th className="py-2 px-3 font-semibold">剩餘本金</th>
+                              <th className="py-2 px-3 font-semibold">月付本息</th>
+                              <th className="py-2 px-3 font-semibold">剩餘期數</th>
+                              <th className="py-2 px-3 text-right font-semibold">操作</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 font-mono-tabular">
+                            {loans.map((ln) => (
+                              <tr key={ln.id} className="hover:bg-slate-50">
+                                <td className="py-2.5 px-3 font-sans font-semibold text-slate-900">
+                                  {ln.name}
+                                </td>
+                                <td className="py-2.5 px-3 text-slate-500">{ln.takenYear}年</td>
+                                <td className="py-2.5 px-3 font-semibold text-rose-700">
+                                  {formatCurrencyWan(ln.remainingPrincipalWan, lang)}
+                                </td>
+                                <td className="py-2.5 px-3 text-slate-800">
+                                  {formatCurrencyWan(ln.monthlyPaymentWan, lang)}
+                                </td>
+                                <td className="py-2.5 px-3 text-slate-700">
+                                  {ln.monthsRemaining} / {ln.monthsTotal} 月
+                                </td>
+                                <td className="py-2.5 px-3 text-right">
+                                  <button
+                                    onClick={() => onRepayLoan(ln.id)}
+                                    disabled={money < ln.remainingPrincipalWan}
+                                    className="px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 disabled:opacity-40 text-slate-800 font-medium cursor-pointer"
+                                  >
+                                    提前清償
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </main>
       </div>

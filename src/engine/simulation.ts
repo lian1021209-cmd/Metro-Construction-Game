@@ -12,7 +12,7 @@ import {
   Train,
   TransitLine,
 } from '../types/game';
-import { TransitRouter } from './pathfinding';
+import { getShortTurnRange, isStationExpressStop, TransitRouter } from './pathfinding';
 
 export const DEFAULT_FARE_POLICY: FarePolicy = {
   baseFare: 2,
@@ -447,23 +447,47 @@ export function stepSimulation(
     const activeLineStations = line.stationIds.filter((id) => stationMap.has(id));
     if (activeLineStations.length < 2) continue;
     const isClosedForNight = line.nightMaintenance && isNightWindow;
+    const [shortStartIdx, shortEndIdx] = getShortTurnRange(line, activeLineStations);
+    const shortZoneSet = new Set(activeLineStations.slice(shortStartIdx, shortEndIdx + 1));
 
-    const desiredTrains = isClosedForNight
-      ? 0
-      : Math.max(1, Math.min(14, Math.round((activeLineStations.length * 6) / Math.max(2, line.headwayMin))));
+    const getRoleForTrainIndex = (idx: number): 'local' | 'express' | 'short_turn' => {
+      if (line.serviceMode === 'express') {
+        if (line.expressPattern === 'express_only') return 'express';
+        return idx % 2 === 0 ? 'express' : 'local';
+      }
+      if (line.serviceMode === 'short_turn' && shortEndIdx > shortStartIdx) {
+        if (line.shortTurnMode === 'short_only') return 'short_turn';
+        return idx % 2 === 1 ? 'short_turn' : 'local';
+      }
+      return 'local';
+    };
+
+    const baseDesired = Math.max(
+      1,
+      Math.min(14, Math.round((activeLineStations.length * 6) / Math.max(2, line.headwayMin)))
+    );
+    const dualPatternBonus =
+      (line.serviceMode === 'express' && line.expressPattern !== 'express_only') ||
+      (line.serviceMode === 'short_turn' && line.shortTurnMode !== 'short_only')
+        ? 1
+        : 0;
+    const desiredTrains = isClosedForNight ? 0 : Math.min(16, baseDesired + dualPatternBonus);
 
     line.dispatchTimer += dtSimMinutes;
-    if (!isClosedForNight && line.trains.length < desiredTrains && line.dispatchTimer >= line.headwayMin * 0.45) {
+    if (!isClosedForNight && line.trains.length < desiredTrains && line.dispatchTimer >= line.headwayMin * 0.42) {
       line.dispatchTimer = 0;
-      const startSt = stationMap.get(activeLineStations[0]);
+      const role = getRoleForTrainIndex(line.trains.length);
+      const spawnStIdx = role === 'short_turn' ? shortStartIdx : 0;
+      const spawnSegIdx = Math.min(activeLineStations.length - 2, spawnStIdx);
+      const startSt = stationMap.get(activeLineStations[spawnStIdx]);
       if (startSt) {
         const newTrain: Train = {
           id: `tr_${line.id}_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
           lineId: line.id,
-          segmentIndex: 0,
+          segmentIndex: spawnSegIdx,
           direction: 1,
           t: 0,
-          speed: line.serviceMode === 'express' ? 210 : 145,
+          speed: role === 'express' ? 225 : role === 'short_turn' ? 155 : 145,
           state: 'dwelling',
           dwellTimer: 0.4,
           passengers: [],
@@ -471,6 +495,7 @@ export function stepSimulation(
           x: startSt.x,
           y: startSt.y,
           angle: 0,
+          serviceRole: role,
         };
         line.trains.push(newTrain);
       }
@@ -478,8 +503,26 @@ export function stepSimulation(
       line.trains.pop();
     }
 
-    for (const train of line.trains) {
-      const segIdx = Math.max(0, Math.min(activeLineStations.length - 2, train.segmentIndex));
+    for (let tIdx = 0; tIdx < line.trains.length; tIdx++) {
+      const train = line.trains[tIdx];
+      const expectedRole = getRoleForTrainIndex(tIdx);
+      if (train.serviceRole !== expectedRole) {
+        train.serviceRole = expectedRole;
+      }
+      const role = train.serviceRole ?? 'local';
+      train.speed = role === 'express' ? 225 : role === 'short_turn' ? 155 : 145;
+
+      const minSegIdx = role === 'short_turn' && shortEndIdx > shortStartIdx ? shortStartIdx : 0;
+      const maxSegIdx =
+        role === 'short_turn' && shortEndIdx > shortStartIdx
+          ? Math.max(minSegIdx, shortEndIdx - 1)
+          : activeLineStations.length - 2;
+
+      const segIdx = Math.max(minSegIdx, Math.min(maxSegIdx, train.segmentIndex));
+      if (train.segmentIndex !== segIdx) {
+        train.segmentIndex = segIdx;
+      }
+
       const aId = activeLineStations[segIdx];
       const bId = activeLineStations[segIdx + 1];
       const stA = stationMap.get(aId);
@@ -487,8 +530,6 @@ export function stepSimulation(
       if (!stA || !stB) continue;
 
       const seg = segMap.get(`${aId}_${bId}`);
-      const cx = seg ? seg.controlX : (stA.x + stB.x) / 2;
-      const cy = seg ? seg.controlY : (stA.y + stB.y) / 2;
       const segLen = seg ? seg.length : Math.hypot(stB.x - stA.x, stB.y - stA.y);
 
       if (train.state === 'dwelling') {
@@ -504,17 +545,15 @@ export function stepSimulation(
           const arrivedAtEnd = train.t >= 1;
           train.t = arrivedAtEnd ? 1 : 0;
           const arrivedStationId = arrivedAtEnd ? bId : aId;
+          const arrivedStationIdx = arrivedAtEnd ? segIdx + 1 : segIdx;
           const arrivedStation = stationMap.get(arrivedStationId);
 
           const isTerminal =
-            (arrivedAtEnd && segIdx === activeLineStations.length - 2) ||
-            (!arrivedAtEnd && segIdx === 0);
+            (arrivedAtEnd && segIdx >= maxSegIdx) || (!arrivedAtEnd && segIdx <= minSegIdx);
           const shouldStop =
-            line.serviceMode !== 'express' ||
+            role !== 'express' ||
             isTerminal ||
-            (arrivedStation
-              ? arrivedStation.isExpressStop || arrivedStation.size === 'hub' || arrivedStation.size === 'mall'
-              : true);
+            isStationExpressStop(arrivedStation, arrivedStationIdx, activeLineStations.length);
 
           if (arrivedStation && shouldStop) {
             train.state = 'dwelling';
@@ -526,20 +565,29 @@ export function stepSimulation(
                 arrivedStation.alightedTotal += AGENT_TO_CITY_PAX;
                 ridershipDelta += AGENT_TO_CITY_PAX;
                 line.dailyRidership += AGENT_TO_CITY_PAX;
-                // Ticket revenue in 萬元 = (AGENT_TO_CITY_PAX * fare) / 10,000
                 const revWan = (AGENT_TO_CITY_PAX * pax.fareAmount) / 10000;
                 revenueDeltaWan += revWan;
                 line.dailyRevenue += revWan;
                 fareSum += pax.fareAmount;
                 fareCount++;
               } else {
-                const canStayOnLine = activeLineStations.includes(pax.destinationId);
+                const destIdx = activeLineStations.indexOf(pax.destinationId);
+                const reachableOnThisTrain =
+                  destIdx !== -1 &&
+                  (role !== 'short_turn' || shortZoneSet.has(pax.destinationId)) &&
+                  (role !== 'express' ||
+                    isStationExpressStop(
+                      stationMap.get(pax.destinationId),
+                      destIdx,
+                      activeLineStations.length
+                    ));
                 const throughLine = liveLines.find((l) => l.id === line.throughTargetLineId);
-                const canStayViaThrough = throughLine
-                  ? throughLine.stationIds.includes(pax.destinationId)
-                  : false;
+                const canStayViaThrough =
+                  role !== 'short_turn' && throughLine
+                    ? throughLine.stationIds.includes(pax.destinationId)
+                    : false;
 
-                if (canStayOnLine || canStayViaThrough) {
+                if (reachableOnThisTrain || canStayViaThrough) {
                   remainingPax.push(pax);
                 } else {
                   const route = router.findRoute(arrivedStationId, pax.destinationId);
@@ -559,8 +607,26 @@ export function stepSimulation(
             train.passengers = remainingPax;
 
             const nextStationInDir = arrivedAtEnd
-              ? activeLineStations[segIdx + 2]
-              : activeLineStations[segIdx - 1];
+              ? segIdx < maxSegIdx
+                ? activeLineStations[segIdx + 2]
+                : undefined
+              : segIdx > minSegIdx
+              ? activeLineStations[segIdx - 1]
+              : undefined;
+
+            const canTrainServeStation = (stationId: string | null): boolean => {
+              if (!stationId) return false;
+              const idx = activeLineStations.indexOf(stationId);
+              if (idx === -1) return false;
+              if (role === 'short_turn' && !shortZoneSet.has(stationId)) return false;
+              if (
+                role === 'express' &&
+                !isStationExpressStop(stationMap.get(stationId), idx, activeLineStations.length)
+              ) {
+                return false;
+              }
+              return true;
+            };
 
             const stillWaiting = [];
             for (const wp of arrivedStation.waiting) {
@@ -570,9 +636,11 @@ export function stepSimulation(
               }
               const route = router.findRoute(arrivedStationId, wp.destinationId);
               const wantsThisLine =
-                activeLineStations.includes(wp.destinationId) ||
-                (route.firstHopStationId && activeLineStations.includes(route.firstHopStationId)) ||
-                (nextStationInDir && route.firstHopStationId === nextStationInDir);
+                canTrainServeStation(wp.destinationId) ||
+                canTrainServeStation(route.firstHopStationId) ||
+                (nextStationInDir &&
+                  route.firstHopStationId === nextStationInDir &&
+                  canTrainServeStation(nextStationInDir));
 
               if (wantsThisLine) {
                 const destSt = stationMap.get(wp.destinationId);
@@ -595,7 +663,7 @@ export function stepSimulation(
           }
 
           if (arrivedAtEnd) {
-            if (segIdx < activeLineStations.length - 2) {
+            if (segIdx < maxSegIdx) {
               train.segmentIndex = segIdx + 1;
               train.t = 0;
             } else {
@@ -603,7 +671,7 @@ export function stepSimulation(
               train.t = 1;
             }
           } else {
-            if (segIdx > 0) {
+            if (segIdx > minSegIdx) {
               train.segmentIndex = segIdx - 1;
               train.t = 1;
             } else {
@@ -613,7 +681,7 @@ export function stepSimulation(
           }
         }
 
-        const curSegIdx = Math.max(0, Math.min(activeLineStations.length - 2, train.segmentIndex));
+        const curSegIdx = Math.max(minSegIdx, Math.min(maxSegIdx, train.segmentIndex));
         const ca = stationMap.get(activeLineStations[curSegIdx]);
         const cb = stationMap.get(activeLineStations[curSegIdx + 1]);
         if (ca && cb) {

@@ -28,8 +28,10 @@ import {
   Menu,
   ChevronUp,
   ChevronDown,
+  Building2,
 } from 'lucide-react';
 import {
+  ActiveLoan,
   CityMap,
   DEPTH_LEVELS,
   DifficultyConfig,
@@ -41,6 +43,8 @@ import {
   Station,
   StationSize,
   STATION_CONFIGS,
+  TOD_CONFIGS,
+  TodPropertyKind,
   ToolMode,
   TrackDepth,
   TransitLine,
@@ -62,6 +66,9 @@ interface FloatingHudProps {
   onChangeSpeed: (s: 0 | 1 | 2 | 4) => void;
   onAdvanceMonth: () => void;
   money: number;
+  loans: ActiveLoan[];
+  onTakeLoan: (offerId: string) => void;
+  onRepayLoan: (loanId: string) => void;
   stats: SimulationStats;
   farePolicy: FarePolicy;
   monthlyCapexWan: number;
@@ -93,6 +100,7 @@ interface FloatingHudProps {
   onClearSelectedStation: () => void;
   onUpdateStation: (id: string, patch: Partial<Station>) => void;
   onUpgradeStation: (id: string, newSize: StationSize) => void;
+  onDevelopTod: (stationId: string, kind: TodPropertyKind) => void;
   onDeleteStation: (id: string) => void;
   layers: LayerVisibility;
   onToggleLayer: (key: keyof Omit<LayerVisibility, 'depthFilter'>) => void;
@@ -115,7 +123,7 @@ interface FloatingHudProps {
   onReturnTitle: () => void;
   onOpenCityStats: () => void;
   onOpenNetworkMap: () => void;
-  onOpenMetroCore: (tab?: 'overview' | 'lines' | 'stations' | 'fleet' | 'fares') => void;
+  onOpenMetroCore: (tab?: 'overview' | 'lines' | 'stations' | 'fleet' | 'fares' | 'loans') => void;
   onOpenMetroCircle: () => void;
   unreadCircleCount: number;
 }
@@ -138,6 +146,9 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
   onChangeSpeed,
   onAdvanceMonth,
   money,
+  loans,
+  onTakeLoan,
+  onRepayLoan,
   stats,
   farePolicy,
   monthlyCapexWan,
@@ -169,6 +180,7 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
   onClearSelectedStation,
   onUpdateStation,
   onUpgradeStation,
+  onDevelopTod,
   onDeleteStation,
   layers,
   onToggleLayer,
@@ -208,6 +220,9 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
   const dayOfMonth = ((day - 1) % 30) + 1;
 
   const activeLine = lines.find((l) => l.id === activeLineId) || lines[0] || null;
+  const todStations = stations.filter((s) => !s.isDraft && s.todProperty);
+  const todCount = todStations.length;
+  const totalTodRentWan = todStations.reduce((sum, s) => sum + (s.todProperty?.monthlyRentWan ?? 0), 0);
 
   const congestionStatus =
     stats.congestionIndex < 1.35
@@ -454,6 +469,12 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
         year={year}
         day={day}
         difficulty={difficulty}
+        money={money}
+        loans={loans}
+        todCount={todCount}
+        totalTodRentWan={totalTodRentWan}
+        onTakeLoan={onTakeLoan}
+        onRepayLoan={onRepayLoan}
         stats={stats}
         farePolicy={farePolicy}
         monthlyCapexWan={monthlyCapexWan}
@@ -462,6 +483,10 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
         onOpenMetroCoreFares={() => {
           setActiveKpi('none');
           onOpenMetroCore('fares');
+        }}
+        onOpenMetroCoreLoans={() => {
+          setActiveKpi('none');
+          onOpenMetroCore('loans');
         }}
       />
 
@@ -998,6 +1023,20 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                   )}
                 </button>
 
+                <button
+                  onClick={() => onOpenMetroCore('lines')}
+                  title="設定路線快慢車、區間車大小交路與班距"
+                  className="h-8 px-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700 whitespace-nowrap cursor-pointer shrink-0"
+                >
+                  {activeLine?.serviceMode === 'express'
+                    ? '快慢車'
+                    : activeLine?.serviceMode === 'short_turn'
+                    ? '區間車'
+                    : activeLine?.serviceMode === 'through'
+                    ? '貫通'
+                    : '站站停'}
+                </button>
+
                 <select
                   value={activeDepth}
                   onChange={(e) => onSelectDepth(e.target.value as TrackDepth)}
@@ -1169,6 +1208,93 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                 );
               })}
             </div>
+          </div>
+
+          {/* TOD 上蓋物業開發 (Rail + Property) */}
+          <div className="space-y-2 pt-2.5 border-t border-slate-200">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-slate-700 flex items-center gap-1.5">
+                <Building2 className="w-3.5 h-3.5 text-amber-600" />
+                <span>TOD 上蓋物業開發</span>
+              </span>
+              {selectedStation.todProperty && (
+                <span className="text-[10px] font-mono-tabular font-semibold text-emerald-700">
+                  +{formatCurrencyWan(selectedStation.todProperty.monthlyRentWan, lang)}/月
+                </span>
+              )}
+            </div>
+
+            {selectedStation.todProperty ? (
+              (() => {
+                const tod = selectedStation.todProperty;
+                const cfg = TOD_CONFIGS[tod.kind];
+                const upgradeCost = Math.round(cfg.costWan * 0.7 * difficulty.costMultiplier);
+                return (
+                  <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-slate-900">
+                        {cfg.label} · Lv.{tod.level}
+                      </span>
+                      <span className="font-mono-tabular text-emerald-700 font-semibold">
+                        月租 +{formatCurrencyWan(tod.monthlyRentWan, lang)}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-500">
+                      已併入銀行抵押授信，降低全線貸款利率並帶動周邊地價與客流。
+                    </p>
+                    {tod.level < 3 ? (
+                      <button
+                        onClick={() => onDevelopTod(selectedStation.id, tod.kind)}
+                        className="w-full py-1.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-medium font-mono-tabular cursor-pointer"
+                      >
+                        擴建至 Lv.{tod.level + 1} (+65% 月租 · {formatCurrencyWan(upgradeCost, lang)})
+                      </button>
+                    ) : (
+                      <div className="text-[10px] font-medium text-amber-700 text-center py-0.5">
+                        已達最高規模 Lv.3
+                      </div>
+                    )}
+                  </div>
+                );
+              })()
+            ) : (
+              <div className="space-y-1.5">
+                {selectedStation.isDraft && (
+                  <div className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-2 py-1">
+                    請先點擊底部「確認建設」竣工後即可開發上蓋物業
+                  </div>
+                )}
+                <div className="grid grid-cols-3 gap-1.5">
+                  {(['retail', 'office', 'apartment'] as TodPropertyKind[]).map((kind) => {
+                    const cfg = TOD_CONFIGS[kind];
+                    const devCost = Math.round(cfg.costWan * difficulty.costMultiplier);
+                    return (
+                      <button
+                        key={kind}
+                        disabled={selectedStation.isDraft}
+                        onClick={() => onDevelopTod(selectedStation.id, kind)}
+                        className="p-2 rounded-lg border border-slate-200 bg-white hover:border-amber-500 hover:bg-amber-50/40 disabled:opacity-45 text-left transition-colors cursor-pointer"
+                      >
+                        <div className="text-[11px] font-semibold text-slate-900 truncate">
+                          {kind === 'retail' ? '商業廣場' : kind === 'office' ? '寫字樓' : '住宅社區'}
+                        </div>
+                        <div className="text-[10px] font-mono-tabular text-amber-700 mt-0.5">
+                          {formatCurrencyWan(devCost, lang)}
+                        </div>
+                        <div className="text-[10px] font-mono-tabular text-emerald-700">
+                          +{formatCurrencyWan(cfg.baseMonthlyRentWan, lang)}/月
+                        </div>
+                        {cfg.presaleRebateWan > 0 && (
+                          <div className="text-[9px] font-mono-tabular text-blue-700">
+                            即返 {formatCurrencyWan(cfg.presaleRebateWan, lang)}
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="space-y-2.5 pt-2.5 border-t border-slate-200 text-xs">
