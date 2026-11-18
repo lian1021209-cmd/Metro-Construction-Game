@@ -9,7 +9,6 @@ import {
   Home,
   Layers,
   Box,
-  ArrowUpDown,
   Plus,
   Minus,
   Compass,
@@ -17,19 +16,18 @@ import {
   MapPin,
   Spline,
   Trash2,
-  Smile,
-  Cpu,
   X,
   Zap,
   CalendarPlus,
   Search,
-  BarChart3,
-  Network,
   Undo2,
   Redo2,
   Check,
   AlertTriangle,
   Globe,
+  Menu,
+  ChevronUp,
+  ChevronDown,
 } from 'lucide-react';
 import {
   CityMap,
@@ -49,7 +47,7 @@ import {
 } from '../types/game';
 import { getDistrictUnlockCost, getTimeOfDayDemand } from '../engine/simulation';
 import { OpenMapStyleId } from '../engine/geo';
-import { formatCurrencyWan, formatPop, LANG_LABELS, t } from '../i18n/translations';
+import { formatCurrencyWan, formatPop, t } from '../i18n/translations';
 import { ActiveKpiPopover, KpiPopovers } from './KpiPopovers';
 
 interface FloatingHudProps {
@@ -122,8 +120,11 @@ interface FloatingHudProps {
   unreadCircleCount: number;
 }
 
-const hudSurface =
-  'bg-white/95 backdrop-blur-sm border border-slate-200/95 text-slate-900 shadow-[0_4px_18px_rgba(15,23,42,0.08)]';
+const popoverSurface =
+  'bg-white/98 backdrop-blur-sm border border-slate-200 text-slate-900 shadow-[0_10px_30px_rgba(15,23,42,0.10)] rounded-xl';
+
+const floatingBarSurface =
+  'bg-white/95 backdrop-blur-sm border border-slate-200 text-slate-900 shadow-[0_4px_16px_rgba(15,23,42,0.08)]';
 
 export const FloatingHud: React.FC<FloatingHudProps> = ({
   lang,
@@ -194,9 +195,8 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
   onOpenMetroCircle,
   unreadCircleCount,
 }) => {
-  const [openDrawer, setOpenDrawer] = useState<'none' | 'layers' | 'depth' | 'search' | 'lang'>(
-    'none'
-  );
+  const [openDrawer, setOpenDrawer] = useState<'none' | 'view' | 'search' | 'menu'>('none');
+  const [linePickerOpen, setLinePickerOpen] = useState(false);
   const [activeKpi, setActiveKpi] = useState<ActiveKpiPopover>('none');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -206,14 +206,8 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
   const demand = getTimeOfDayDemand(gameMinutesOfDay);
   const month = Math.min(12, Math.floor((day - 1) / 30) + 1);
   const dayOfMonth = ((day - 1) % 30) + 1;
-  const dayProgress = gameMinutesOfDay / 1440;
 
-  const liveLines = lines.filter((l) => !l.isDraft);
-  const eraTitle = liveLines.every((l) => l.stationIds.length < 2)
-    ? t(lang, 'eraNoMetro')
-    : liveLines.length === 1
-    ? t(lang, 'eraSingleLine')
-    : t(lang, 'eraNetwork');
+  const activeLine = lines.find((l) => l.id === activeLineId) || lines[0] || null;
 
   const congestionStatus =
     stats.congestionIndex < 1.35
@@ -254,225 +248,203 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
     return list.slice(0, 10);
   }, [searchQuery, stations, map.pois, map.districts, difficulty, lang]);
 
+  const toggleDrawer = (target: 'view' | 'search' | 'menu') => {
+    setActiveKpi('none');
+    setLinePickerOpen(false);
+    setOpenDrawer((prev) => (prev === target ? 'none' : target));
+  };
+
+  const toggleKpi = (target: Exclude<ActiveKpiPopover, 'none'>) => {
+    setOpenDrawer('none');
+    setLinePickerOpen(false);
+    setActiveKpi((prev) => (prev === target ? 'none' : target));
+  };
+
   return (
     <>
-      {/* TOP-LEFT TIME & SPEED CONTROL BAR */}
-      <div
-        className={`fixed top-4 left-4 z-30 ${hudSurface} rounded-xl px-3.5 py-2 flex items-center gap-3.5`}
-      >
-        <div className="relative w-8 h-8 shrink-0 flex items-center justify-center">
-          <svg className="w-8 h-8 -rotate-90" viewBox="0 0 36 36">
-            <circle
-              cx="18"
-              cy="18"
-              r="14"
-              fill="none"
-              stroke="#E2E8F0"
-              strokeWidth="3.2"
-            />
-            <circle
-              cx="18"
-              cy="18"
-              r="14"
-              fill="none"
-              stroke={hours >= 6 && hours < 19 ? '#2563EB' : '#475569'}
-              strokeWidth="3.2"
-              strokeDasharray={`${dayProgress * 88} 88`}
-              strokeLinecap="round"
-            />
-          </svg>
-        </div>
-
-        <div className="min-w-[148px]">
-          <div className="text-[11px] text-slate-500 flex items-center gap-1.5 whitespace-nowrap">
-            <span className="font-medium text-slate-700">{map.name}</span>
-            <span aria-hidden="true">·</span>
-            <span>{demand.periodLabel}</span>
-            <span aria-hidden="true" className="hidden md:inline">·</span>
-            <span className="hidden md:inline text-slate-600">{eraTitle}</span>
-          </div>
-          <div className="flex items-baseline gap-2 mt-0.5 whitespace-nowrap">
-            <span className="text-sm font-bold text-slate-950 font-mono-tabular">
-              {year}年{month}月{dayOfMonth}日
+      {/* SINGLE EDGE-TO-EDGE SLIM TOP HEADER */}
+      <header className="fixed top-0 inset-x-0 z-30 h-12 bg-white/95 backdrop-blur-sm border-b border-slate-200 px-4 flex items-center justify-between gap-4">
+        {/* Left: City, Date/Time & Speed Segmented Control */}
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-center gap-2 whitespace-nowrap">
+            <span className="text-sm font-bold text-slate-950 tracking-tight">{map.name}</span>
+            <span className="text-slate-300 hidden sm:inline" aria-hidden="true">
+              ·
             </span>
-            <span className="text-xs font-mono-tabular text-slate-500">{timeStr}</span>
+            <span className="text-xs font-mono-tabular text-slate-600 hidden sm:inline">
+              {year}/{String(month).padStart(2, '0')}/{String(dayOfMonth).padStart(2, '0')}{' '}
+              {timeStr}
+            </span>
+            <span className="text-[11px] text-slate-400 hidden xl:inline">
+              {demand.periodLabel}
+            </span>
           </div>
-        </div>
 
-        <div className="flex items-center gap-0.5 bg-slate-100 border border-slate-200/80 rounded-lg p-0.5">
-          <button
-            onClick={() => onChangeSpeed(speed === 0 ? 1 : 0)}
-            title={speed === 0 ? t(lang, 'resume') : t(lang, 'paused')}
-            className={`w-8 h-7 rounded-md flex items-center justify-center transition-colors cursor-pointer ${
-              speed === 0
-                ? 'bg-amber-500 text-white'
-                : 'bg-white text-slate-900 shadow-2xs hover:bg-slate-50'
-            }`}
-          >
-            {speed === 0 ? (
-              <Play className="w-3.5 h-3.5 fill-current" />
-            ) : (
-              <Pause className="w-3.5 h-3.5" />
-            )}
-          </button>
-          {([1, 2, 4] as const).map((s) => (
+          <div className="flex items-center gap-0.5 bg-slate-100 border border-slate-200/80 rounded-lg p-0.5 shrink-0">
             <button
-              key={s}
-              onClick={() => onChangeSpeed(s)}
-              className={`px-2 h-7 rounded-md text-xs font-mono-tabular font-medium transition-colors cursor-pointer ${
-                speed === s
-                  ? 'bg-slate-900 text-white'
-                  : 'text-slate-600 hover:text-slate-950 hover:bg-white/70'
+              onClick={() => onChangeSpeed(speed === 0 ? 1 : 0)}
+              title={speed === 0 ? `${t(lang, 'resume')} (${t(lang, 'space')})` : t(lang, 'paused')}
+              className={`h-7 px-2 rounded-md flex items-center gap-1 text-[11px] font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                speed === 0
+                  ? 'bg-amber-500 text-white'
+                  : 'bg-white text-slate-800 shadow-2xs hover:bg-slate-50'
               }`}
             >
-              {s}x
+              {speed === 0 ? (
+                <>
+                  <Play className="w-3 h-3 fill-current" />
+                  <span className="hidden md:inline">{t(lang, 'paused')}</span>
+                </>
+              ) : (
+                <Pause className="w-3 h-3" />
+              )}
             </button>
-          ))}
-          <button
-            onClick={onAdvanceMonth}
-            className="px-2.5 h-7 rounded-md text-xs font-medium text-slate-700 hover:text-slate-950 hover:bg-white flex items-center gap-1 transition-colors whitespace-nowrap cursor-pointer"
-          >
-            <CalendarPlus className="w-3.5 h-3.5 text-blue-600" />
-            <span>{t(lang, 'advanceMonth')}</span>
-          </button>
+            {([1, 2, 4] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => onChangeSpeed(s)}
+                className={`px-2 h-7 rounded-md text-[11px] font-mono-tabular font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                  speed === s
+                    ? 'bg-slate-900 text-white'
+                    : 'text-slate-600 hover:text-slate-950 hover:bg-white/70'
+                }`}
+              >
+                {s}x
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
 
-      {/* TOP-CENTER PAUSE INDICATOR */}
-      {speed === 0 && (
-        <button
-          onClick={() => onChangeSpeed(1)}
-          className={`fixed top-20 left-1/2 -translate-x-1/2 z-30 ${hudSurface} rounded-lg px-4 py-1.5 flex items-center gap-2.5 text-xs cursor-pointer hover:border-amber-400 transition-colors`}
-        >
-          <span className="text-amber-700 font-semibold">{t(lang, 'paused')}</span>
-          <span className="text-slate-300" aria-hidden="true">|</span>
-          <span className="font-mono-tabular text-[11px] text-slate-600">{t(lang, 'space')}</span>
-          <span className="text-slate-500">{t(lang, 'resume')}</span>
-        </button>
-      )}
-
-      {/* TOP-RIGHT KPI STRIP & UTILITY ACTIONS */}
-      <div className="fixed top-4 right-4 z-30 flex items-center gap-2">
-        <div
-          className={`hidden xl:flex ${hudSurface} rounded-xl py-1 px-1 items-center divide-x divide-slate-200`}
-        >
+        {/* Center: Flat Inline Clickable KPIs */}
+        <div className="hidden lg:flex items-center divide-x divide-slate-200">
           <button
-            onClick={() => setActiveKpi(activeKpi === 'finance' ? 'none' : 'finance')}
-            className={`px-3 py-1 rounded-lg text-left transition-colors cursor-pointer ${
+            onClick={() => toggleKpi('finance')}
+            className={`px-3 py-1 rounded-md text-left transition-colors whitespace-nowrap cursor-pointer ${
               activeKpi === 'finance' ? 'bg-slate-100' : 'hover:bg-slate-50'
             }`}
           >
-            <div className="text-[10px] text-slate-500 whitespace-nowrap">{t(lang, 'funds')}</div>
-            <div className="text-sm font-bold font-mono-tabular text-slate-950 whitespace-nowrap">
+            <span className="text-[11px] text-slate-500 mr-1.5">{t(lang, 'funds')}</span>
+            <span className="text-xs font-bold font-mono-tabular text-slate-950">
               {formatCurrencyWan(money, lang)}
-            </div>
+            </span>
           </button>
 
           <button
-            onClick={() => setActiveKpi(activeKpi === 'population' ? 'none' : 'population')}
-            className={`px-3 py-1 rounded-lg text-left transition-colors cursor-pointer ${
+            onClick={() => toggleKpi('population')}
+            className={`px-3 py-1 rounded-md text-left transition-colors whitespace-nowrap cursor-pointer ${
               activeKpi === 'population' ? 'bg-slate-100' : 'hover:bg-slate-50'
             }`}
           >
-            <div className="text-[10px] text-slate-500 whitespace-nowrap">{t(lang, 'population')}</div>
-            <div className="text-sm font-bold font-mono-tabular text-slate-950 whitespace-nowrap">
+            <span className="text-[11px] text-slate-500 mr-1.5">{t(lang, 'population')}</span>
+            <span className="text-xs font-bold font-mono-tabular text-slate-950">
               {formatPop(stats.totalPopulation, lang)}
-            </div>
+            </span>
           </button>
 
           <button
-            onClick={() => setActiveKpi(activeKpi === 'share' ? 'none' : 'share')}
-            className={`px-3 py-1 rounded-lg text-left transition-colors cursor-pointer ${
+            onClick={() => toggleKpi('share')}
+            className={`px-3 py-1 rounded-md text-left transition-colors whitespace-nowrap cursor-pointer ${
               activeKpi === 'share' ? 'bg-slate-100' : 'hover:bg-slate-50'
             }`}
           >
-            <div className="text-[10px] text-slate-500 whitespace-nowrap">{t(lang, 'metroShare')}</div>
-            <div className="text-sm font-bold font-mono-tabular text-slate-950 whitespace-nowrap">
+            <span className="text-[11px] text-slate-500 mr-1.5">{t(lang, 'metroShare')}</span>
+            <span className="text-xs font-bold font-mono-tabular text-slate-950">
               {stats.modeSharePercent.toFixed(1)}%
-            </div>
+            </span>
           </button>
 
           <button
-            onClick={() => setActiveKpi(activeKpi === 'congestion' ? 'none' : 'congestion')}
-            className={`px-3 py-1 rounded-lg text-left transition-colors cursor-pointer ${
+            onClick={() => toggleKpi('congestion')}
+            className={`px-3 py-1 rounded-md text-left transition-colors whitespace-nowrap cursor-pointer ${
               activeKpi === 'congestion' ? 'bg-slate-100' : 'hover:bg-slate-50'
             }`}
           >
-            <div className="text-[10px] text-slate-500 whitespace-nowrap">{t(lang, 'congestionIdx')}</div>
-            <div className="text-sm font-bold font-mono-tabular text-slate-950 flex items-baseline gap-1.5 whitespace-nowrap">
-              <span>{stats.congestionIndex.toFixed(2)}</span>
-              <span className={`text-[11px] font-semibold ${congestionStatus.cls}`}>
-                {congestionStatus.label}
-              </span>
-            </div>
+            <span className="text-[11px] text-slate-500 mr-1.5">{t(lang, 'congestionIdx')}</span>
+            <span className="text-xs font-bold font-mono-tabular text-slate-950 mr-1">
+              {stats.congestionIndex.toFixed(2)}
+            </span>
+            <span className={`text-[11px] font-semibold ${congestionStatus.cls}`}>
+              {congestionStatus.label}
+            </span>
           </button>
         </div>
 
-        {/* Utility Toolbar */}
-        <div className={`${hudSurface} rounded-xl p-1 flex items-center gap-0.5`}>
+        {/* Right: Concise Navigation Text Tabs + 3 Utility Triggers */}
+        <div className="flex items-center gap-1 shrink-0">
+          <nav className="hidden md:flex items-center gap-1 mr-1">
+            <button
+              onClick={onOpenCityStats}
+              className="px-2.5 h-8 rounded-md text-xs font-medium text-slate-600 hover:text-slate-950 hover:bg-slate-100 transition-colors whitespace-nowrap cursor-pointer"
+            >
+              {lang === 'en' ? 'Stats' : '統計'}
+            </button>
+            <button
+              onClick={() => onOpenMetroCore('overview')}
+              className="px-2.5 h-8 rounded-md text-xs font-medium text-slate-600 hover:text-slate-950 hover:bg-slate-100 transition-colors whitespace-nowrap cursor-pointer"
+            >
+              {lang === 'en' ? 'Lines' : '線網'}
+            </button>
+            <button
+              onClick={onOpenNetworkMap}
+              className="px-2.5 h-8 rounded-md text-xs font-medium text-slate-600 hover:text-slate-950 hover:bg-slate-100 transition-colors whitespace-nowrap cursor-pointer"
+            >
+              {lang === 'en' ? 'Topology' : '拓撲'}
+            </button>
+            <button
+              onClick={onOpenMetroCircle}
+              className="px-2.5 h-8 rounded-md text-xs font-medium text-slate-600 hover:text-slate-950 hover:bg-slate-100 transition-colors whitespace-nowrap cursor-pointer"
+            >
+              {lang === 'en' ? 'Feed' : '動態'}
+              {unreadCircleCount > 0 && (
+                <span className="ml-1 font-mono-tabular text-blue-600 font-semibold">
+                  ({unreadCircleCount})
+                </span>
+              )}
+            </button>
+          </nav>
+
+          <div className="hidden md:block h-4 w-px bg-slate-200 mx-1" />
+
           <button
-            onClick={() => setOpenDrawer(openDrawer === 'search' ? 'none' : 'search')}
+            onClick={() => toggleDrawer('search')}
             title={t(lang, 'searchPlaceholder')}
-            className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
+            className={`h-8 px-2 rounded-md flex items-center gap-1.5 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
               openDrawer === 'search'
                 ? 'bg-slate-900 text-white'
                 : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
             }`}
           >
-            <Search className="w-4 h-4" />
+            <Search className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">{lang === 'en' ? 'Find' : '搜尋'}</span>
           </button>
+
           <button
-            onClick={onOpenCityStats}
-            title={t(lang, 'cityStats')}
-            className="w-9 h-9 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-600 hover:text-slate-950 transition-colors cursor-pointer"
+            onClick={() => toggleDrawer('view')}
+            title={t(lang, 'layers')}
+            className={`h-8 px-2 rounded-md flex items-center gap-1.5 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+              openDrawer === 'view'
+                ? 'bg-slate-900 text-white'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
+            }`}
           >
-            <BarChart3 className="w-4 h-4" />
+            <Layers className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">{t(lang, 'layers')}</span>
           </button>
+
           <button
-            onClick={onOpenNetworkMap}
-            title={t(lang, 'networkMap')}
-            className="w-9 h-9 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-600 hover:text-slate-950 transition-colors cursor-pointer"
+            onClick={() => toggleDrawer('menu')}
+            title={lang === 'en' ? 'Menu' : '選單'}
+            className={`h-8 px-2 rounded-md flex items-center gap-1.5 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+              openDrawer === 'menu'
+                ? 'bg-slate-900 text-white'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
+            }`}
           >
-            <Network className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setOpenDrawer(openDrawer === 'lang' ? 'none' : 'lang')}
-            title="語言 / Language"
-            className="px-2.5 h-9 rounded-lg hover:bg-slate-100 flex items-center gap-1 text-[11px] font-semibold text-slate-700 hover:text-slate-950 transition-colors cursor-pointer"
-          >
-            <Globe className="w-3.5 h-3.5 text-slate-500" />
-            <span>{LANG_LABELS[lang]}</span>
-          </button>
-          <button
-            onClick={onOpenSetup}
-            title="開局與難度設定"
-            className="w-9 h-9 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-600 hover:text-slate-950 transition-colors cursor-pointer"
-          >
-            <MapIcon className="w-4 h-4" />
-          </button>
-          <button
-            onClick={onOpenGdd}
-            title="系統設計文件 (GDD)"
-            className="w-9 h-9 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-600 hover:text-slate-950 transition-colors cursor-pointer"
-          >
-            <FileText className="w-4 h-4" />
-          </button>
-          <button
-            onClick={onToggleMute}
-            title={muted ? '開啟音效' : '靜音'}
-            className="w-9 h-9 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-600 hover:text-slate-950 transition-colors cursor-pointer"
-          >
-            {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-          </button>
-          <button
-            onClick={onReturnTitle}
-            title="返回主畫面"
-            className="w-9 h-9 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-600 hover:text-slate-950 transition-colors cursor-pointer"
-          >
-            <Home className="w-4 h-4" />
+            <Menu className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">{lang === 'en' ? 'Menu' : '選單'}</span>
           </button>
         </div>
-      </div>
+      </header>
 
       {/* INTERACTIVE KPI DRILL-DOWN POPOVER */}
       <KpiPopovers
@@ -493,11 +465,9 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
         }}
       />
 
-      {/* SEARCH JUMP POPOVER */}
+      {/* SEARCH POPOVER */}
       {openDrawer === 'search' && (
-        <div
-          className={`fixed top-18 right-24 z-35 w-80 ${hudSurface} rounded-xl p-3 space-y-2.5`}
-        >
+        <div className={`fixed top-14 right-4 z-35 w-80 ${popoverSurface} p-3 space-y-2.5`}>
           <div className="relative">
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
             <input
@@ -510,7 +480,7 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
             />
             <button
               onClick={() => setOpenDrawer('none')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-800"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-800 cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -541,102 +511,21 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
         </div>
       )}
 
-      {/* LANGUAGE SWITCHER POPOVER */}
-      {openDrawer === 'lang' && (
-        <div className={`fixed top-18 right-16 z-35 w-36 ${hudSurface} rounded-xl p-1 space-y-0.5`}>
-          {(['zh-Hant', 'zh-Hans', 'en'] as Language[]).map((l) => (
-            <button
-              key={l}
-              onClick={() => {
-                onChangeLang(l);
-                setOpenDrawer('none');
-              }}
-              className={`w-full px-3 py-1.5 rounded-lg text-xs font-medium text-left flex items-center justify-between transition-colors cursor-pointer ${
-                lang === l ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'
-              }`}
-            >
-              <span>{l === 'zh-Hant' ? '繁體中文' : l === 'zh-Hans' ? '简体中文' : 'English'}</span>
-              {lang === l && <Check className="w-3.5 h-3.5" />}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* BOTTOM-LEFT VERTICAL DOCK */}
-      <div className="fixed bottom-4 left-4 z-30 flex flex-col gap-3">
-        <div className={`${hudSurface} rounded-xl p-1 flex flex-col items-center gap-0.5 w-13`}>
-          <button
-            onClick={() => setOpenDrawer(openDrawer === 'layers' ? 'none' : 'layers')}
-            className={`w-10 py-2 rounded-lg flex flex-col items-center gap-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
-              openDrawer === 'layers'
-                ? 'bg-slate-900 text-white'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
-            }`}
-          >
-            <Layers className="w-4 h-4" />
-            <span>{t(lang, 'layers')}</span>
-          </button>
-
-          <button
-            onClick={onToggle25D}
-            title="切換 2.5D 視角 (快捷鍵 T)"
-            className={`w-10 py-2 rounded-lg flex flex-col items-center gap-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
-              is25D ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
-            }`}
-          >
-            <Box className="w-4 h-4" />
-            <span>2.5D</span>
-          </button>
-
-          <button
-            onClick={() => setOpenDrawer(openDrawer === 'depth' ? 'none' : 'depth')}
-            className={`w-10 py-2 rounded-lg flex flex-col items-center gap-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
-              layers.depthFilter !== 'ALL' || openDrawer === 'depth'
-                ? 'bg-slate-900 text-white'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
-            }`}
-          >
-            <ArrowUpDown className="w-4 h-4" />
-            <span>{layers.depthFilter === 'ALL' ? t(lang, 'depthView') : layers.depthFilter}</span>
-          </button>
-
-          <div className="w-7 h-px bg-slate-200 my-1" />
-
-          <button
-            onClick={onZoomIn}
-            title="放大"
-            className="w-10 h-8 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100 hover:text-slate-950 transition-colors cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-          </button>
-          <button
-            onClick={onZoomOut}
-            title="縮小"
-            className="w-10 h-8 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100 hover:text-slate-950 transition-colors cursor-pointer"
-          >
-            <Minus className="w-4 h-4" />
-          </button>
-          <button
-            onClick={onResetView}
-            title={t(lang, 'resetView')}
-            className="w-10 h-8 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100 hover:text-slate-950 transition-colors cursor-pointer"
-          >
-            <Compass className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-
-      {/* LEFT-DOCK POPOVER: LAYERS */}
-      {openDrawer === 'layers' && (
+      {/* UNIFIED VIEW, LAYERS, BASEMAP & DEPTH POPOVER */}
+      {openDrawer === 'view' && (
         <div
-          className={`fixed bottom-20 left-20 z-30 w-64 ${hudSurface} rounded-xl p-3.5 space-y-2.5`}
+          className={`fixed top-14 right-4 z-35 w-72 ${popoverSurface} p-3.5 space-y-3 max-h-[80vh] overflow-y-auto`}
         >
           <div className="flex items-center justify-between text-xs font-semibold text-slate-900 pb-2 border-b border-slate-200">
-            <span>{t(lang, 'layers')}</span>
-            <button onClick={() => setOpenDrawer('none')} className="text-slate-400 hover:text-slate-900">
+            <span>{t(lang, 'layers')}與視圖</span>
+            <button
+              onClick={() => setOpenDrawer('none')}
+              className="text-slate-400 hover:text-slate-900 cursor-pointer"
+            >
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
+
           <div className="space-y-1">
             {[
               { key: 'populationHeatmap' as const, label: '人口與職缺熱區' },
@@ -658,6 +547,49 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                 />
               </label>
             ))}
+          </div>
+
+          <div className="pt-2.5 border-t border-slate-200 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-semibold text-slate-500">
+                {t(lang, 'depthView')}
+              </span>
+              <button
+                onClick={onToggle25D}
+                className={`px-2 py-0.5 rounded text-[11px] font-medium transition-colors cursor-pointer ${
+                  is25D
+                    ? 'bg-slate-900 text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                2.5D {is25D ? '開' : '關'}
+              </button>
+            </div>
+            <div className="grid grid-cols-4 gap-1">
+              <button
+                onClick={() => onChangeDepthFilter('ALL')}
+                className={`py-1 text-[11px] rounded-md font-medium cursor-pointer ${
+                  layers.depthFilter === 'ALL'
+                    ? 'bg-slate-900 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80'
+                }`}
+              >
+                {t(lang, 'allDepth')}
+              </button>
+              {DEPTH_LEVELS.map((d) => (
+                <button
+                  key={d.id}
+                  onClick={() => onChangeDepthFilter(d.id)}
+                  className={`py-1 text-[11px] rounded-md font-mono-tabular font-medium cursor-pointer ${
+                    layers.depthFilter === d.id
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80'
+                  }`}
+                >
+                  {d.id}
+                </button>
+              ))}
+            </div>
           </div>
 
           {map.geoBounds && (
@@ -689,129 +621,300 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
         </div>
       )}
 
-      {/* LEFT-DOCK POPOVER: DEPTH FILTER */}
-      {openDrawer === 'depth' && (
-        <div
-          className={`fixed bottom-20 left-20 z-30 w-52 ${hudSurface} rounded-xl p-3.5 space-y-2.5`}
-        >
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-900 pb-2 border-b border-slate-200">
-            <span>{t(lang, 'depthView')}</span>
-            <button onClick={() => setOpenDrawer('none')} className="text-slate-400 hover:text-slate-900">
-              <X className="w-3.5 h-3.5" />
+      {/* UNIFIED SYSTEM MENU DROPDOWN */}
+      {openDrawer === 'menu' && (
+        <div className={`fixed top-14 right-4 z-35 w-60 ${popoverSurface} p-1.5 space-y-0.5`}>
+          {/* Compact mobile nav fallbacks */}
+          <div className="md:hidden grid grid-cols-2 gap-1 p-1 border-b border-slate-100 mb-1">
+            <button
+              onClick={() => {
+                setOpenDrawer('none');
+                onOpenCityStats();
+              }}
+              className="px-2 py-1.5 rounded-md bg-slate-50 text-xs font-medium text-slate-800 text-left cursor-pointer"
+            >
+              統計總覽
+            </button>
+            <button
+              onClick={() => {
+                setOpenDrawer('none');
+                onOpenMetroCore('overview');
+              }}
+              className="px-2 py-1.5 rounded-md bg-slate-50 text-xs font-medium text-slate-800 text-left cursor-pointer"
+            >
+              線網中心
+            </button>
+            <button
+              onClick={() => {
+                setOpenDrawer('none');
+                onOpenNetworkMap();
+              }}
+              className="px-2 py-1.5 rounded-md bg-slate-50 text-xs font-medium text-slate-800 text-left cursor-pointer"
+            >
+              路線拓撲圖
+            </button>
+            <button
+              onClick={() => {
+                setOpenDrawer('none');
+                onOpenMetroCircle();
+              }}
+              className="px-2 py-1.5 rounded-md bg-slate-50 text-xs font-medium text-slate-800 text-left cursor-pointer"
+            >
+              市民動態
             </button>
           </div>
-          <div className="grid grid-cols-2 gap-1.5">
+
+          <button
+            onClick={() => {
+              onAdvanceMonth();
+              setOpenDrawer('none');
+            }}
+            className="w-full px-3 py-2 rounded-lg text-xs font-medium text-slate-800 hover:bg-slate-100 flex items-center gap-2.5 text-left transition-colors cursor-pointer"
+          >
+            <CalendarPlus className="w-4 h-4 text-blue-600" />
+            <span>{t(lang, 'advanceMonth')}</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setOpenDrawer('none');
+              onOpenSetup();
+            }}
+            className="w-full px-3 py-2 rounded-lg text-xs font-medium text-slate-800 hover:bg-slate-100 flex items-center gap-2.5 text-left transition-colors cursor-pointer"
+          >
+            <MapIcon className="w-4 h-4 text-slate-500" />
+            <span>開局與難度設定</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setOpenDrawer('none');
+              onOpenGdd();
+            }}
+            className="w-full px-3 py-2 rounded-lg text-xs font-medium text-slate-800 hover:bg-slate-100 flex items-center gap-2.5 text-left transition-colors cursor-pointer"
+          >
+            <FileText className="w-4 h-4 text-slate-500" />
+            <span>系統設計文件 (GDD)</span>
+          </button>
+
+          <button
+            onClick={onToggleMute}
+            className="w-full px-3 py-2 rounded-lg text-xs font-medium text-slate-800 hover:bg-slate-100 flex items-center justify-between text-left transition-colors cursor-pointer"
+          >
+            <span className="flex items-center gap-2.5">
+              {muted ? (
+                <VolumeX className="w-4 h-4 text-slate-400" />
+              ) : (
+                <Volume2 className="w-4 h-4 text-slate-500" />
+              )}
+              <span>{muted ? '音效已關閉' : '音效已開啟'}</span>
+            </span>
+            <span className="text-[11px] font-mono-tabular text-slate-400">
+              {muted ? 'OFF' : 'ON'}
+            </span>
+          </button>
+
+          <div className="border-t border-slate-100 my-1 pt-1 px-2 py-1">
+            <div className="flex items-center gap-1.5 text-[11px] text-slate-400 mb-1.5">
+              <Globe className="w-3 h-3" />
+              <span>語言 / Language</span>
+            </div>
+            <div className="grid grid-cols-3 gap-1">
+              {(['zh-Hant', 'zh-Hans', 'en'] as Language[]).map((l) => (
+                <button
+                  key={l}
+                  onClick={() => onChangeLang(l)}
+                  className={`py-1 rounded text-[11px] font-medium transition-colors cursor-pointer ${
+                    lang === l
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200/80'
+                  }`}
+                >
+                  {l === 'zh-Hant' ? '繁體' : l === 'zh-Hans' ? '简体' : 'EN'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="border-t border-slate-100 my-1 pt-1">
             <button
-              onClick={() => onChangeDepthFilter('ALL')}
-              className={`py-1.5 text-xs rounded-lg font-medium cursor-pointer ${
-                layers.depthFilter === 'ALL'
-                  ? 'bg-slate-900 text-white'
-                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80'
-              }`}
+              onClick={() => {
+                setOpenDrawer('none');
+                onReturnTitle();
+              }}
+              className="w-full px-3 py-2 rounded-lg text-xs font-medium text-rose-700 hover:bg-rose-50 flex items-center gap-2.5 text-left transition-colors cursor-pointer"
             >
-              {t(lang, 'allDepth')}
+              <Home className="w-4 h-4" />
+              <span>返回主畫面</span>
             </button>
-            {DEPTH_LEVELS.map((d) => (
-              <button
-                key={d.id}
-                onClick={() => onChangeDepthFilter(d.id)}
-                className={`py-1.5 text-xs rounded-lg font-medium cursor-pointer ${
-                  layers.depthFilter === d.id
-                    ? 'bg-slate-900 text-white'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80'
-                }`}
-              >
-                {d.shortLabel}
-              </button>
-            ))}
           </div>
         </div>
       )}
 
-      {/* FLOATING DRAFT COMMIT BAR */}
-      {draftCount > 0 && (
-        <div
-          className={`fixed left-1/2 -translate-x-1/2 z-30 ${hudSurface} border-blue-500/40 rounded-xl px-4 py-2 flex items-center gap-3 ${
-            tool === 'station' || tool === 'track' ? 'bottom-40' : 'bottom-24'
-          }`}
-        >
-          <div className="flex items-center gap-2 text-xs">
-            <span className="font-semibold text-blue-700">
-              {t(lang, 'draftItems')} {draftCount} {t(lang, 'itemsSuffix')}
-            </span>
-            <span className="font-mono-tabular font-bold text-slate-950">
-              {formatCurrencyWan(draftCostWan, lang)}
-            </span>
-            {draftWarnings > 0 && (
-              <span className="flex items-center gap-1 text-amber-700 font-mono-tabular">
-                <AlertTriangle className="w-3.5 h-3.5" />
-                {draftWarnings}
+      {/* SINGLE SLEEK BOTTOM-CENTER BUILD BAR (+ CONDITIONAL DRAFT STRIP) */}
+      <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-30 flex flex-col items-center gap-2 max-w-[95vw]">
+        {draftCount > 0 && (
+          <div
+            className={`${floatingBarSurface} border-blue-500/40 rounded-xl px-3.5 py-1.5 flex items-center gap-2.5 whitespace-nowrap`}
+          >
+            <div className="flex items-center gap-2 text-xs">
+              <span className="font-semibold text-blue-700">
+                {t(lang, 'draftItems')} {draftCount} {t(lang, 'itemsSuffix')}
               </span>
-            )}
-          </div>
+              <span className="font-mono-tabular font-bold text-slate-950">
+                {formatCurrencyWan(draftCostWan, lang)}
+              </span>
+              {draftWarnings > 0 && (
+                <span className="flex items-center gap-1 text-amber-700 font-mono-tabular">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  {draftWarnings}
+                </span>
+              )}
+            </div>
 
-          <div className="h-4 w-px bg-slate-200" />
+            <div className="h-4 w-px bg-slate-200" />
 
-          <div className="flex items-center gap-0.5">
+            <div className="flex items-center gap-0.5">
+              <button
+                onClick={onUndoDraft}
+                disabled={!canUndoDraft}
+                title={t(lang, 'undo')}
+                className="p-1 rounded-md text-slate-600 hover:bg-slate-100 disabled:opacity-35 cursor-pointer"
+              >
+                <Undo2 className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={onRedoDraft}
+                disabled={!canRedoDraft}
+                title={t(lang, 'redo')}
+                className="p-1 rounded-md text-slate-600 hover:bg-slate-100 disabled:opacity-35 cursor-pointer"
+              >
+                <Redo2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
             <button
-              onClick={onUndoDraft}
-              disabled={!canUndoDraft}
-              title={t(lang, 'undo')}
-              className="p-1.5 rounded-lg text-slate-600 hover:bg-slate-100 disabled:opacity-35 cursor-pointer"
+              onClick={onDiscardDraft}
+              className="px-2 py-1 rounded-md bg-slate-100 hover:bg-rose-50 text-xs text-slate-700 hover:text-rose-700 transition-colors cursor-pointer"
             >
-              <Undo2 className="w-3.5 h-3.5" />
+              {t(lang, 'discardDraft')}
             </button>
+
             <button
-              onClick={onRedoDraft}
-              disabled={!canRedoDraft}
-              title={t(lang, 'redo')}
-              className="p-1.5 rounded-lg text-slate-600 hover:bg-slate-100 disabled:opacity-35 cursor-pointer"
+              onClick={onConfirmDraft}
+              className="px-3 py-1 rounded-md bg-blue-600 hover:bg-blue-700 text-xs font-semibold text-white flex items-center gap-1 transition-colors cursor-pointer"
             >
-              <Redo2 className="w-3.5 h-3.5" />
+              <Check className="w-3.5 h-3.5" />
+              <span>{t(lang, 'confirmBuild')}</span>
             </button>
           </div>
+        )}
 
-          <button
-            onClick={onDiscardDraft}
-            className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-rose-50 text-xs text-slate-700 hover:text-rose-700 transition-colors cursor-pointer"
-          >
-            {t(lang, 'discardDraft')}
-          </button>
-
-          <button
-            onClick={onConfirmDraft}
-            className="px-3.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-xs font-semibold text-white flex items-center gap-1.5 transition-colors cursor-pointer"
-          >
-            <Check className="w-3.5 h-3.5" />
-            <span>{t(lang, 'confirmBuild')}</span>
-          </button>
-        </div>
-      )}
-
-      {/* BOTTOM-CENTER CONTEXTUAL TRAY */}
-      {(tool === 'station' || tool === 'track') && (
-        <div
-          className={`fixed bottom-24 left-1/2 -translate-x-1/2 z-30 ${hudSurface} rounded-xl px-4 py-2.5 flex flex-col gap-2 max-w-[92vw]`}
-        >
-          {tool === 'station' && (
-            <>
-              <div className="flex items-center justify-between gap-4 text-[11px] text-slate-500">
-                <span>{t(lang, 'stationHint')}</span>
-                <label className="flex items-center gap-1.5 cursor-pointer text-slate-700 hover:text-slate-950 whitespace-nowrap">
-                  <input
-                    type="checkbox"
-                    checked={draftMode}
-                    onChange={onToggleDraftMode}
-                    className="w-3.5 h-3.5 accent-blue-600 rounded"
-                  />
-                  <span>{draftMode ? t(lang, 'draftMode') : t(lang, 'instantMode')}</span>
-                </label>
-              </div>
-              <div className="flex items-center gap-3 overflow-x-auto">
-                <div className="flex items-center gap-1">
-                  <span className="text-[11px] text-slate-500 mr-1 whitespace-nowrap">
-                    {t(lang, 'methodLabel')}:
+        <div className="relative">
+          {/* Upward Line Picker Menu when Track Tool is active */}
+          {tool === 'track' && linePickerOpen && (
+            <div
+              className={`absolute bottom-13 left-0 z-40 w-60 ${popoverSurface} p-1.5 space-y-0.5 max-h-64 overflow-y-auto`}
+            >
+              {lines.map((line) => (
+                <button
+                  key={line.id}
+                  onClick={() => {
+                    onSelectLine(line.id);
+                    setLinePickerOpen(false);
+                  }}
+                  className={`w-full px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center justify-between transition-colors cursor-pointer ${
+                    line.id === activeLineId
+                      ? 'bg-slate-900 text-white'
+                      : 'text-slate-700 hover:bg-slate-100'
+                  }`}
+                >
+                  <span className="flex items-center gap-2 truncate">
+                    <span
+                      className="w-2.5 h-2.5 rounded-xs shrink-0"
+                      style={{ backgroundColor: line.color }}
+                    />
+                    <span className="truncate">{line.name}</span>
                   </span>
+                  <span className="text-[10px] font-mono-tabular opacity-70 shrink-0 ml-2">
+                    {line.stationIds.length}站
+                  </span>
+                </button>
+              ))}
+              <div className="border-t border-slate-100 mt-1 pt-1">
+                <button
+                  onClick={() => {
+                    onCreateLine();
+                    setLinePickerOpen(false);
+                  }}
+                  className="w-full px-2.5 py-1.5 rounded-lg text-xs font-medium text-blue-700 hover:bg-blue-50 flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>新增地鐵路線</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Unified Single-Row Build Dock */}
+          <div
+            className={`${floatingBarSurface} rounded-xl p-1 flex items-center gap-1 overflow-x-auto max-w-[95vw]`}
+          >
+            {/* Primary 4 Tools */}
+            <div className="flex items-center gap-0.5 shrink-0">
+              {(
+                [
+                  {
+                    id: 'select',
+                    label: t(lang, 'select'),
+                    icon: <MousePointer2 className="w-3.5 h-3.5" />,
+                  },
+                  {
+                    id: 'station',
+                    label: t(lang, 'station'),
+                    icon: <MapPin className="w-3.5 h-3.5" />,
+                  },
+                  {
+                    id: 'track',
+                    label: t(lang, 'track'),
+                    icon: <Spline className="w-3.5 h-3.5" />,
+                  },
+                  {
+                    id: 'demolish',
+                    label: t(lang, 'demolish'),
+                    icon: <Trash2 className="w-3.5 h-3.5" />,
+                  },
+                ] as { id: ToolMode; label: string; icon: React.ReactNode }[]
+              ).map((item) => {
+                const active = tool === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => {
+                      setLinePickerOpen(false);
+                      onSelectTool(item.id);
+                    }}
+                    className={`h-9 px-3 rounded-lg flex items-center gap-1.5 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
+                      active
+                        ? item.id === 'demolish'
+                          ? 'bg-rose-600 text-white'
+                          : 'bg-slate-950 text-white'
+                        : 'text-slate-600 hover:text-slate-950 hover:bg-slate-100'
+                    }`}
+                  >
+                    {item.icon}
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Inline Station Tool Options (Same Single Row) */}
+            {tool === 'station' && (
+              <>
+                <div className="h-5 w-px bg-slate-200 mx-1 shrink-0" />
+
+                <div className="flex items-center gap-0.5 bg-slate-100 p-0.5 rounded-lg shrink-0">
                   {(
                     [
                       { id: 'underground' as const, label: t(lang, 'underground') },
@@ -822,10 +925,10 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                     <button
                       key={m.id}
                       onClick={() => onSelectElevationMode(m.id)}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-colors cursor-pointer ${
+                      className={`h-7 px-2.5 rounded-md text-xs font-medium whitespace-nowrap transition-colors cursor-pointer ${
                         elevationMode === m.id
-                          ? 'bg-slate-900 text-white'
-                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80'
+                          ? 'bg-white text-slate-950 shadow-2xs'
+                          : 'text-slate-600 hover:text-slate-950'
                       }`}
                     >
                       {m.label}
@@ -834,208 +937,157 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                 </div>
 
                 {elevationMode === 'underground' && (
-                  <div className="flex items-center gap-0.5 bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                  <select
+                    value={activeDepth}
+                    onChange={(e) => onSelectDepth(e.target.value as TrackDepth)}
+                    aria-label={t(lang, 'depthView')}
+                    className="h-8 px-2 rounded-lg bg-slate-50 border border-slate-200 text-xs font-mono-tabular font-medium text-slate-800 focus:outline-none focus:border-blue-600 cursor-pointer shrink-0"
+                  >
                     {DEPTH_LEVELS.filter((d) => d.id !== 'EL').map((d) => (
-                      <button
-                        key={d.id}
-                        onClick={() => onSelectDepth(d.id)}
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono-tabular font-medium cursor-pointer ${
-                          activeDepth === d.id
-                            ? 'bg-white text-slate-950 shadow-2xs'
-                            : 'text-slate-500 hover:text-slate-900'
-                        }`}
-                      >
-                        {d.id}
-                      </button>
+                      <option key={d.id} value={d.id}>
+                        {d.shortLabel}
+                      </option>
                     ))}
-                  </div>
+                  </select>
                 )}
 
-                <div className="h-5 w-px bg-slate-200 shrink-0" />
-
-                <div className="flex items-center gap-1">
-                  <span className="text-[11px] text-slate-500 mr-1 whitespace-nowrap">
-                    {t(lang, 'scaleLabel')}:
-                  </span>
-                  {(
-                    [
-                      { id: 'small' as const, label: t(lang, 'small') },
-                      { id: 'standard' as const, label: t(lang, 'medium') },
-                      { id: 'hub' as const, label: t(lang, 'large') },
-                      { id: 'mall' as const, label: t(lang, 'mega') },
-                    ]
-                  ).map((sz) => (
-                    <button
-                      key={sz.id}
-                      onClick={() => onSelectStationSize(sz.id)}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-colors cursor-pointer ${
-                        stationSize === sz.id
-                          ? 'bg-slate-900 text-white'
-                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80'
-                      }`}
-                    >
-                      {sz.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </>
-          )}
-
-          {tool === 'track' && (
-            <div className="flex items-center gap-3 overflow-x-auto">
-              <div className="flex items-center gap-1.5">
-                {lines.map((line) => (
-                  <button
-                    key={line.id}
-                    onClick={() => onSelectLine(line.id)}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer ${
-                      line.id === activeLineId
-                        ? 'bg-slate-900 text-white'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80'
-                    }`}
-                  >
-                    <span
-                      className="w-2.5 h-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: line.color }}
-                    />
-                    <span>{line.name}</span>
-                  </button>
-                ))}
-                <button
-                  onClick={onCreateLine}
-                  className="px-2.5 py-1 rounded-lg text-xs font-medium text-blue-700 hover:bg-blue-50 flex items-center gap-1 whitespace-nowrap cursor-pointer"
+                <select
+                  value={stationSize}
+                  onChange={(e) => onSelectStationSize(e.target.value as StationSize)}
+                  aria-label={t(lang, 'scaleLabel')}
+                  className="h-8 px-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs font-medium text-slate-800 focus:outline-none focus:border-blue-600 cursor-pointer shrink-0"
                 >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>新線</span>
-                </button>
-              </div>
-              <div className="h-5 w-px bg-slate-200 shrink-0" />
-              <div className="flex items-center gap-1">
-                {DEPTH_LEVELS.map((d) => (
-                  <button
-                    key={d.id}
-                    onClick={() => onSelectDepth(d.id)}
-                    className={`px-2 py-1 rounded-lg text-xs font-mono-tabular font-medium whitespace-nowrap transition-colors cursor-pointer ${
-                      activeDepth === d.id
-                        ? 'bg-slate-900 text-white'
-                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
-                    }`}
-                  >
-                    {d.shortLabel}
-                  </button>
-                ))}
-              </div>
-              <div className="h-5 w-px bg-slate-200 shrink-0" />
-              <label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-700 whitespace-nowrap">
-                <input
-                  type="checkbox"
-                  checked={draftMode}
-                  onChange={onToggleDraftMode}
-                  className="w-3.5 h-3.5 accent-blue-600 rounded"
-                />
-                <span>{draftMode ? t(lang, 'draftMode') : t(lang, 'instantMode')}</span>
-              </label>
-              {trackStartStationName && (
-                <>
-                  <div className="h-5 w-px bg-slate-200 shrink-0" />
-                  <div className="flex items-center gap-2 text-xs text-slate-800 whitespace-nowrap">
-                    <span>
-                      起點: <strong>{trackStartStationName}</strong>
-                      {hasTrackWaypoint ? ' (已設彎道)' : ' · 點空地設彎道或點目標站'}
-                    </span>
-                    <button
-                      onClick={onCancelTrackDraw}
-                      className="text-rose-600 hover:text-rose-800 underline cursor-pointer"
-                    >
-                      取消
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+                  <option value="small">{t(lang, 'small')}</option>
+                  <option value="standard">{t(lang, 'medium')}</option>
+                  <option value="hub">{t(lang, 'large')}</option>
+                  <option value="mall">{t(lang, 'mega')}</option>
+                </select>
 
-      {/* BOTTOM-CENTER PRIMARY ACTION DOCK */}
-      <div
-        className={`fixed bottom-4 left-1/2 -translate-x-1/2 z-30 ${hudSurface} rounded-xl p-1 flex items-center gap-1`}
-      >
-        {(
-          [
-            { id: 'select', label: t(lang, 'select'), icon: <MousePointer2 className="w-4 h-4" /> },
-            { id: 'station', label: t(lang, 'station'), icon: <MapPin className="w-4 h-4" /> },
-            { id: 'track', label: t(lang, 'track'), icon: <Spline className="w-4 h-4" /> },
-            { id: 'demolish', label: t(lang, 'demolish'), icon: <Trash2 className="w-4 h-4" /> },
-          ] as { id: ToolMode; label: string; icon: React.ReactNode }[]
-        ).map((item) => {
-          const active = tool === item.id;
-          return (
-            <button
-              key={item.id}
-              onClick={() => onSelectTool(item.id)}
-              className={`w-16 py-2 rounded-lg flex flex-col items-center justify-center gap-1 text-xs font-medium transition-colors cursor-pointer ${
-                active
-                  ? item.id === 'demolish'
-                    ? 'bg-rose-600 text-white'
-                    : 'bg-slate-950 text-white'
-                  : 'text-slate-600 hover:text-slate-950 hover:bg-slate-100'
-              }`}
-            >
-              {item.icon}
-              <span className="text-[11px]">{item.label}</span>
-            </button>
-          );
-        })}
+                <label className="h-8 px-2.5 rounded-lg hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer text-xs text-slate-700 whitespace-nowrap shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={draftMode}
+                    onChange={onToggleDraftMode}
+                    className="w-3.5 h-3.5 accent-blue-600 rounded"
+                  />
+                  <span>{draftMode ? t(lang, 'draftMode') : t(lang, 'instantMode')}</span>
+                </label>
+              </>
+            )}
+
+            {/* Inline Track Tool Options (Same Single Row) */}
+            {tool === 'track' && (
+              <>
+                <div className="h-5 w-px bg-slate-200 mx-1 shrink-0" />
+
+                <button
+                  onClick={() => setLinePickerOpen((v) => !v)}
+                  className="h-8 px-2.5 rounded-lg bg-slate-100 hover:bg-slate-200/80 text-xs font-medium text-slate-900 flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0"
+                >
+                  {activeLine && (
+                    <span
+                      className="w-2.5 h-2.5 rounded-xs shrink-0"
+                      style={{ backgroundColor: activeLine.color }}
+                    />
+                  )}
+                  <span>{activeLine ? activeLine.name : '選擇路線'}</span>
+                  {linePickerOpen ? (
+                    <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                  ) : (
+                    <ChevronUp className="w-3.5 h-3.5 text-slate-500" />
+                  )}
+                </button>
+
+                <select
+                  value={activeDepth}
+                  onChange={(e) => onSelectDepth(e.target.value as TrackDepth)}
+                  aria-label={t(lang, 'depthView')}
+                  className="h-8 px-2 rounded-lg bg-slate-50 border border-slate-200 text-xs font-mono-tabular font-medium text-slate-800 focus:outline-none focus:border-blue-600 cursor-pointer shrink-0"
+                >
+                  {DEPTH_LEVELS.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.shortLabel}
+                    </option>
+                  ))}
+                </select>
+
+                <label className="h-8 px-2.5 rounded-lg hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer text-xs text-slate-700 whitespace-nowrap shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={draftMode}
+                    onChange={onToggleDraftMode}
+                    className="w-3.5 h-3.5 accent-blue-600 rounded"
+                  />
+                  <span>{draftMode ? t(lang, 'draftMode') : t(lang, 'instantMode')}</span>
+                </label>
+
+                {trackStartStationName && (
+                  <>
+                    <div className="h-5 w-px bg-slate-200 mx-0.5 shrink-0" />
+                    <div className="flex items-center gap-2 px-1.5 text-xs text-slate-800 whitespace-nowrap shrink-0">
+                      <span>
+                        起點: <strong>{trackStartStationName}</strong>
+                        {hasTrackWaypoint ? ' (已設彎道)' : ' · 點空地彎道或點目標站'}
+                      </span>
+                      <button
+                        onClick={onCancelTrackDraw}
+                        className="text-rose-600 hover:text-rose-800 font-medium cursor-pointer"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        </div>
       </div>
 
-      {/* BOTTOM-RIGHT OPERATION BUTTONS */}
-      <div className="fixed bottom-4 right-4 z-30 flex items-center gap-2">
+      {/* QUIET BOTTOM-RIGHT VIEWPORT STRIP */}
+      <div
+        className={`fixed bottom-5 right-5 z-30 ${floatingBarSurface} rounded-lg p-0.5 flex items-center gap-0.5`}
+      >
         <button
-          onClick={() => onOpenMetroCore('overview')}
-          className={`${hudSurface} rounded-xl px-4 py-2.5 flex items-center gap-3 hover:border-slate-300 hover:bg-slate-50 transition-colors cursor-pointer`}
+          onClick={onZoomOut}
+          title="縮小"
+          className="w-8 h-8 rounded-md flex items-center justify-center text-slate-600 hover:bg-slate-100 hover:text-slate-950 transition-colors cursor-pointer"
         >
-          <Cpu className="w-4 h-4 text-slate-600" />
-          <div className="text-left">
-            <div className="text-[10px] text-slate-500">{t(lang, 'metroCore')}</div>
-            <div className="text-sm font-bold font-mono-tabular text-slate-950">
-              {liveLines.length} {t(lang, 'linesUnit')}
-            </div>
-          </div>
+          <Minus className="w-3.5 h-3.5" />
         </button>
-
         <button
-          onClick={onOpenMetroCircle}
-          className={`relative ${hudSurface} rounded-xl px-4 py-2.5 flex items-center gap-3 hover:border-slate-300 hover:bg-slate-50 transition-colors cursor-pointer`}
+          onClick={onResetView}
+          title={t(lang, 'resetView')}
+          className="w-8 h-8 rounded-md flex items-center justify-center text-slate-600 hover:bg-slate-100 hover:text-slate-950 transition-colors cursor-pointer"
         >
-          {unreadCircleCount > 0 && (
-            <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-md bg-rose-600 text-white text-[10px] font-mono-tabular font-bold flex items-center justify-center shadow-xs">
-              {unreadCircleCount}
-            </span>
-          )}
-          <Smile
-            className={`w-4 h-4 ${
-              stats.satisfaction >= 70
-                ? 'text-emerald-600'
-                : stats.satisfaction >= 45
-                ? 'text-amber-600'
-                : 'text-rose-600'
-            }`}
-          />
-          <div className="text-left">
-            <div className="text-[10px] text-slate-500">{t(lang, 'metroCircle')}</div>
-            <div className="text-sm font-bold font-mono-tabular text-slate-950">
-              {stats.satisfaction}
-            </div>
-          </div>
+          <Compass className="w-3.5 h-3.5" />
+        </button>
+        <button
+          onClick={onZoomIn}
+          title="放大"
+          className="w-8 h-8 rounded-md flex items-center justify-center text-slate-600 hover:bg-slate-100 hover:text-slate-950 transition-colors cursor-pointer"
+        >
+          <Plus className="w-3.5 h-3.5" />
+        </button>
+        <div className="h-4 w-px bg-slate-200 mx-0.5" />
+        <button
+          onClick={onToggle25D}
+          title="切換 2.5D 視角 (快捷鍵 T)"
+          className={`h-8 px-2 rounded-md flex items-center gap-1 text-[11px] font-mono-tabular font-medium transition-colors cursor-pointer ${
+            is25D
+              ? 'bg-slate-900 text-white'
+              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
+          }`}
+        >
+          <Box className="w-3.5 h-3.5" />
+          <span>2.5D</span>
         </button>
       </div>
 
       {/* FLOATING STATION INSPECTOR */}
       {selectedStation && (
         <div
-          className={`fixed top-20 right-4 z-30 w-88 ${hudSurface} rounded-xl p-4 space-y-3.5 max-h-[75vh] overflow-y-auto`}
+          className={`fixed top-14 right-4 z-30 w-88 ${popoverSurface} p-4 space-y-3.5 max-h-[75vh] overflow-y-auto`}
         >
           <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-200">
             <input
@@ -1125,9 +1177,24 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
               <div className="flex items-center gap-0.5 bg-slate-100 p-0.5 rounded-lg border border-slate-200">
                 {(
                   [
-                    { id: 'underground' as const, label: t(lang, 'underground'), meters: -15, depth: 'B1' as TrackDepth },
-                    { id: 'ground' as const, label: t(lang, 'ground'), meters: 0, depth: 'B1' as TrackDepth },
-                    { id: 'elevated' as const, label: t(lang, 'elevated'), meters: 10, depth: 'EL' as TrackDepth },
+                    {
+                      id: 'underground' as const,
+                      label: t(lang, 'underground'),
+                      meters: -15,
+                      depth: 'B1' as TrackDepth,
+                    },
+                    {
+                      id: 'ground' as const,
+                      label: t(lang, 'ground'),
+                      meters: 0,
+                      depth: 'B1' as TrackDepth,
+                    },
+                    {
+                      id: 'elevated' as const,
+                      label: t(lang, 'elevated'),
+                      meters: 10,
+                      depth: 'EL' as TrackDepth,
+                    },
                   ]
                 ).map((m) => (
                   <button

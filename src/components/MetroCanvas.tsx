@@ -2141,7 +2141,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
             }`}
             style={{
               left: Math.min(window.innerWidth - 230, hoveredRoadTooltip.sx + 16),
-              top: Math.max(76, hoveredRoadTooltip.sy - 68),
+              top: Math.max(60, hoveredRoadTooltip.sy - 68),
             }}
           >
             <div className="text-xs font-semibold">{hoveredRoadTooltip.name}</div>
@@ -2176,7 +2176,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
         )}
 
         {/* Dynamic Scale Bar */}
-        <div className="pointer-events-none fixed bottom-7 left-20 z-20 px-1.5">
+        <div className="pointer-events-none fixed bottom-7 left-5 z-20 px-1.5">
           <div
             ref={scaleTextRef}
             className={`text-[11px] font-mono-tabular font-semibold mb-1 ${
@@ -2196,7 +2196,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
 
         {hasGeo && (
           <div
-            className={`pointer-events-none fixed bottom-2.5 left-20 z-10 text-[10px] font-mono-tabular ${
+            className={`pointer-events-none fixed bottom-2.5 left-5 z-10 text-[10px] font-mono-tabular ${
               isDarkMapStyle ? 'text-slate-400/80' : 'text-slate-500'
             }`}
           >

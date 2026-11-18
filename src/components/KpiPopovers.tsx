@@ -63,7 +63,7 @@ export const KpiPopovers: React.FC<KpiPopoversProps> = ({
 
   if (active === 'finance') {
     return (
-      <div className={`fixed top-18 right-64 z-40 w-84 ${lightPopover} p-4 space-y-3.5`}>
+      <div className={`fixed top-14 left-1/2 -translate-x-1/2 z-40 w-84 ${lightPopover} p-4 space-y-3.5`}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
             <Coins className="w-4 h-4 text-amber-600" />
@@ -227,7 +227,7 @@ export const KpiPopovers: React.FC<KpiPopoversProps> = ({
 
   if (active === 'population') {
     return (
-      <div className={`fixed top-18 right-48 z-40 w-80 ${lightPopover} p-4 space-y-3.5`}>
+      <div className={`fixed top-14 left-1/2 -translate-x-1/2 z-40 w-80 ${lightPopover} p-4 space-y-3.5`}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
             <Users className="w-4 h-4 text-blue-600" />
@@ -273,7 +273,7 @@ export const KpiPopovers: React.FC<KpiPopoversProps> = ({
 
   if (active === 'share') {
     return (
-      <div className={`fixed top-18 right-28 z-40 w-84 ${lightPopover} p-4 space-y-3.5`}>
+      <div className={`fixed top-14 left-1/2 -translate-x-1/2 z-40 w-84 ${lightPopover} p-4 space-y-3.5`}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
             <TrainFront className="w-4 h-4 text-teal-600" />
@@ -332,7 +332,7 @@ export const KpiPopovers: React.FC<KpiPopoversProps> = ({
   }
 
   return (
-    <div className={`fixed top-18 right-12 z-40 w-84 ${lightPopover} p-4 space-y-3.5`}>
+    <div className={`fixed top-14 left-1/2 -translate-x-1/2 z-40 w-84 ${lightPopover} p-4 space-y-3.5`}>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
           <CarFront className="w-4 h-4 text-emerald-600" />
