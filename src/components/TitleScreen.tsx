@@ -1,14 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import {
-  Play,
-  Clock,
-  SlidersHorizontal,
-  FileText,
-  ChevronRight,
-  Volume2,
-  VolumeX,
-  Compass,
-} from 'lucide-react';
+import { ArrowRight, Play, Volume2, VolumeX } from 'lucide-react';
 
 interface TitleScreenProps {
   currentCityLabel: string;
@@ -100,13 +91,13 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
       if (ctx) {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-        // Crisp daylight studio paper background
-        ctx.fillStyle = '#F4F6F9';
+        // Crisp daylight studio background
+        ctx.fillStyle = '#F5F7FA';
         ctx.fillRect(0, 0, w, h);
 
         const tileW = Math.max(28, Math.min(46, w * 0.032));
         const tileH = tileW * 0.5;
-        const originX = w * 0.69;
+        const originX = w * 0.7;
         const originY = h * 0.16;
 
         const iso = (gx: number, gy: number, z = 0) => ({
@@ -114,7 +105,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
           y: originY + (gx + gy) * tileH - z,
         });
 
-        // 1. Base City Ground & River Channel (Clean daylight cartographic palette)
+        // 1. Base City Ground & River Channel
         for (let gy = 0; gy < 18; gy++) {
           for (let gx = 0; gx < 18; gx++) {
             const p0 = iso(gx, gy);
@@ -138,20 +129,20 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
             } else if (isRoad) {
               ctx.fillStyle = '#FFFFFF';
               ctx.fill();
-              ctx.strokeStyle = 'rgba(148, 163, 184, 0.25)';
+              ctx.strokeStyle = 'rgba(148, 163, 184, 0.24)';
               ctx.lineWidth = 0.6;
               ctx.stroke();
             } else {
               ctx.fillStyle = '#E8EDF3';
               ctx.fill();
-              ctx.strokeStyle = 'rgba(148, 163, 184, 0.22)';
+              ctx.strokeStyle = 'rgba(148, 163, 184, 0.2)';
               ctx.lineWidth = 0.7;
               ctx.stroke();
             }
           }
         }
 
-        // 2. Crisp Transit Viaducts & Articulated Trains (Zero neon glow)
+        // 2. Transit Viaducts, Station Nodes & Train Consists
         const drawIsoRail = (
           pts: [number, number, number][],
           color: string,
@@ -182,6 +173,16 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
           ctx.beginPath();
           screenPts.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
           ctx.stroke();
+
+          for (let i = 1; i < screenPts.length - 1; i++) {
+            ctx.fillStyle = '#FFFFFF';
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(screenPts[i].x, screenPts[i].y, 4.2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          }
 
           for (let car = 0; car < 3; car++) {
             const ct = (tPos - car * 0.022 + 1) % 1;
@@ -232,7 +233,6 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
           const bBot2 = iso(x1, y1, 0);
           const bBot3 = iso(x0, y1, 0);
 
-          // Left-facing wall (sunlit ivory)
           ctx.fillStyle =
             b.hue === 'cool' ? '#E4EAF2' : b.hue === 'warm' ? '#ECEEEF' : '#F2F4F7';
           ctx.beginPath();
@@ -243,7 +243,6 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
           ctx.closePath();
           ctx.fill();
 
-          // Right-facing wall (shaded architectural slate-gray)
           ctx.fillStyle =
             b.hue === 'cool' ? '#CBD5E1' : b.hue === 'warm' ? '#D6DCE5' : '#DDE3EB';
           ctx.beginPath();
@@ -254,7 +253,6 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
           ctx.closePath();
           ctx.fill();
 
-          // Roof face (crisp white)
           ctx.fillStyle =
             b.hue === 'cool' ? '#F8FAFC' : b.hue === 'warm' ? '#FFFFFF' : '#FAFBFD';
           ctx.beginPath();
@@ -319,117 +317,119 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   }, []);
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-[#F4F6F9] text-slate-900 select-none">
+    <div className="relative w-screen h-screen overflow-hidden bg-[#F5F7FA] text-slate-900 select-none flex flex-col">
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block" />
+      <div className="absolute inset-0 bg-gradient-to-r from-[#F5F7FA] via-[#F5F7FA]/85 to-transparent pointer-events-none" />
 
-      <div className="absolute inset-0 bg-gradient-to-r from-[#F4F6F9] via-[#F4F6F9]/88 to-transparent pointer-events-none" />
+      {/* Clean 3-Zone Top Header matching In-Game HUD */}
+      <header className="relative z-20 h-12 px-6 md:px-12 border-b border-slate-200/80 bg-white/85 backdrop-blur-sm flex items-center justify-between gap-8">
+        <span className="text-sm font-bold tracking-tight text-slate-950 whitespace-nowrap shrink-0">
+          地鐵構築者
+        </span>
 
-      {/* Top-Right Minimal Icon Controls */}
-      <div className="absolute top-6 right-7 z-20 flex items-center gap-2">
+        <nav className="hidden sm:flex items-center gap-6 text-xs font-medium text-slate-600">
+          <button
+            onClick={onQuickDemo}
+            className="hover:text-slate-950 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            示範路網
+          </button>
+          <button
+            onClick={onOpenGdd}
+            className="hover:text-slate-950 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            設計文件
+          </button>
+          <button
+            onClick={onToggleMute}
+            className="hover:text-slate-950 transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            {muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+            <span>{muted ? '靜音中' : '音效開'}</span>
+          </button>
+        </nav>
+
         <button
-          onClick={onOpenGdd}
-          title="系統架構設計文件"
-          className="w-10 h-10 rounded-lg bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 shadow-xs flex items-center justify-center text-slate-600 hover:text-slate-900 transition-colors cursor-pointer"
+          onClick={onContinueGame}
+          className="px-3.5 py-1.5 rounded-md bg-slate-900 hover:bg-slate-800 text-white text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer"
         >
-          <FileText className="w-4 h-4" />
+          繼續運行
         </button>
-        <button
-          onClick={onToggleMute}
-          title={muted ? '開啟音效' : '靜音'}
-          className="w-10 h-10 rounded-lg bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 shadow-xs flex items-center justify-center text-slate-600 hover:text-slate-900 transition-colors cursor-pointer"
-        >
-          {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-        </button>
-      </div>
+      </header>
 
-      {/* Left-Aligned Daylight Studio Hero & Clean Menu */}
-      <div className="relative z-10 h-full flex flex-col justify-between px-10 md:px-16 py-12 max-w-xl">
-        <div className="pt-6 space-y-8">
-          <div className="space-y-2.5">
-            <div className="text-xs font-medium text-slate-500 tracking-wide">
-              上海都市軌道交通模擬系統
+      {/* Main Asymmetric Editorial Hero */}
+      <main className="relative z-10 flex-1 flex flex-col justify-center px-6 md:px-12 max-w-2xl">
+        <div className="space-y-8">
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 text-xs text-slate-500">
+              <span>上海十六區真實地理邊界</span>
+              <span aria-hidden="true">·</span>
+              <span>無網格自由軌道工程模擬</span>
             </div>
-            <h1 className="text-5xl md:text-[54px] font-bold tracking-tight text-slate-950 leading-none">
-              地鐵構築者
+
+            <h1 className="text-5xl md:text-[56px] font-bold tracking-tight text-slate-950 leading-[1.06] text-balance">
+              構築都市的軌道脈絡
             </h1>
-            <p className="text-sm text-slate-600 max-w-sm leading-relaxed">
-              MetroForge · 無網格自由線路設計、跨江地下分層工程與動態通勤人流模擬
+
+            <p className="text-sm md:text-[15px] text-slate-600 max-w-lg leading-relaxed">
+              從人民廣場核心出發，跨越黃浦江與蘇州河劃設地下 B1–B5 與高架路網。結合實地街道命名與早晚高峰通勤分流演算，打造高覆蓋率的立體地鐵系統。
             </p>
           </div>
 
-          <div className="space-y-2.5 w-full max-w-[360px]">
+          {/* Primary + Quiet Secondary Action (Zero Button Stack Clutter) */}
+          <div className="flex flex-wrap items-center gap-3">
             <button
               onClick={onStartNewGame}
-              className="w-full px-5 py-3.5 rounded-lg bg-slate-950 hover:bg-slate-800 text-white shadow-sm flex items-center justify-between transition-colors group cursor-pointer"
+              className="px-5 py-2.5 rounded-lg bg-slate-950 hover:bg-slate-800 text-white text-sm font-semibold flex items-center gap-2.5 transition-colors whitespace-nowrap cursor-pointer"
             >
-              <span className="flex items-center gap-3 text-sm font-semibold">
-                <Play className="w-4 h-4 fill-current" />
-                <span>開始遊戲</span>
-              </span>
-              <span className="flex items-center gap-1.5 text-xs text-slate-300 group-hover:translate-x-0.5 transition-transform">
-                <span>選擇難度與開局</span>
-                <ChevronRight className="w-4 h-4" />
-              </span>
+              <Play className="w-3.5 h-3.5 fill-current" />
+              <span>開始新規劃</span>
             </button>
 
-            <div className="bg-white border border-slate-200 rounded-lg divide-y divide-slate-200 shadow-[0_2px_10px_rgba(15,23,42,0.04)] overflow-hidden">
-              <button
-                onClick={onContinueGame}
-                className="w-full px-4 py-3 hover:bg-slate-50 flex items-center justify-between text-slate-800 transition-colors group cursor-pointer"
-              >
-                <span className="flex items-center gap-3 text-sm font-medium">
-                  <Clock className="w-4 h-4 text-slate-500" />
-                  <span>進入目前都市</span>
-                </span>
-                <span className="flex items-center gap-1 text-xs text-slate-500 group-hover:text-slate-900">
-                  <span>{currentCityLabel}</span>
-                  <ChevronRight className="w-4 h-4" />
-                </span>
-              </button>
+            <button
+              onClick={onContinueGame}
+              className="px-5 py-2.5 rounded-lg bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 text-sm font-medium transition-colors whitespace-nowrap cursor-pointer"
+            >
+              進入目前都市 ({currentCityLabel})
+            </button>
+          </div>
 
+          {/* Unboxed Architectural Specifications & Quick Demo Link */}
+          <div className="pt-6 border-t border-slate-200/90 space-y-4 max-w-lg">
+            <div className="grid grid-cols-3 gap-6">
+              <div>
+                <div className="text-lg font-bold font-mono-tabular text-slate-950">16 區</div>
+                <div className="text-xs text-slate-500 mt-0.5">水陸與行政區界</div>
+              </div>
+              <div>
+                <div className="text-lg font-bold font-mono-tabular text-slate-950">EL / B1–B5</div>
+                <div className="text-xs text-slate-500 mt-0.5">多層隧道貫通</div>
+              </div>
+              <div>
+                <div className="text-lg font-bold font-mono-tabular text-slate-950">即時模擬</div>
+                <div className="text-xs text-slate-500 mt-0.5">道路分流與票務</div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-5 pt-1">
               <button
-                onClick={onStartNewGame}
-                className="w-full px-4 py-3 hover:bg-slate-50 flex items-center justify-between text-slate-800 transition-colors group cursor-pointer"
+                onClick={onQuickDemo}
+                className="text-xs font-semibold text-blue-700 hover:text-blue-900 flex items-center gap-1.5 transition-colors whitespace-nowrap cursor-pointer"
               >
-                <span className="flex items-center gap-3 text-sm font-medium">
-                  <SlidersHorizontal className="w-4 h-4 text-slate-500" />
-                  <span>開局設定與財政難度</span>
-                </span>
-                <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-slate-900" />
+                <span>載入多線示範路網並立即觀察列車運行</span>
+                <ArrowRight className="w-3.5 h-3.5" />
               </button>
 
               <button
                 onClick={onOpenGdd}
-                className="w-full px-4 py-3 hover:bg-slate-50 flex items-center justify-between text-slate-800 transition-colors group cursor-pointer"
+                className="sm:hidden text-xs font-medium text-slate-600 hover:text-slate-950 transition-colors whitespace-nowrap cursor-pointer"
               >
-                <span className="flex items-center gap-3 text-sm font-medium">
-                  <FileText className="w-4 h-4 text-slate-500" />
-                  <span>系統設計說明 (GDD)</span>
-                </span>
-                <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-slate-900" />
+                系統設計文件
               </button>
             </div>
-
-            <button
-              onClick={onQuickDemo}
-              className="w-full px-4 py-2.5 rounded-lg border border-slate-300/90 bg-white/75 hover:bg-white hover:border-blue-600/40 flex items-center justify-between text-slate-700 transition-colors group cursor-pointer"
-            >
-              <span className="flex items-center gap-2 text-xs">
-                <Compass className="w-3.5 h-3.5 text-blue-600" />
-                <span>載入多線示範路網</span>
-                <span className="text-slate-400">·</span>
-                <span className="text-blue-700 font-medium">立即觀察列車運行</span>
-              </span>
-              <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-slate-800" />
-            </button>
           </div>
         </div>
-
-        <div className="space-y-1 text-xs text-slate-500">
-          <p className="text-slate-600 font-medium">上海 16 區真實地理邊界 · 黃浦江／蘇州河／三島水陸實景</p>
-          <p>支援 EL 高架與 B1–B5 深層軌道立體分層、快慢車及貫通運轉模擬</p>
-        </div>
-      </div>
+      </main>
     </div>
   );
 };
