@@ -2,10 +2,6 @@ import React, { useMemo, useState } from 'react';
 import {
   Play,
   Pause,
-  Coins,
-  Users,
-  TrainFront,
-  CarFront,
   Map as MapIcon,
   FileText,
   Volume2,
@@ -126,8 +122,8 @@ interface FloatingHudProps {
   unreadCircleCount: number;
 }
 
-const glassIsland =
-  'bg-[#0A1322]/85 backdrop-blur-xl border border-white/10 shadow-[0_12px_40px_rgba(0,0,0,0.55)]';
+const hudSurface =
+  'bg-white/95 backdrop-blur-sm border border-slate-200/95 text-slate-900 shadow-[0_4px_18px_rgba(15,23,42,0.08)]';
 
 export const FloatingHud: React.FC<FloatingHudProps> = ({
   lang,
@@ -221,12 +217,12 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
 
   const congestionStatus =
     stats.congestionIndex < 1.35
-      ? { label: t(lang, 'smooth'), cls: 'text-emerald-400' }
+      ? { label: t(lang, 'smooth'), cls: 'text-emerald-700' }
       : stats.congestionIndex < 1.85
-      ? { label: t(lang, 'moderate'), cls: 'text-amber-300' }
+      ? { label: t(lang, 'moderate'), cls: 'text-amber-700' }
       : stats.congestionIndex < 2.25
-      ? { label: t(lang, 'congested'), cls: 'text-orange-400' }
-      : { label: t(lang, 'severe'), cls: 'text-rose-400' };
+      ? { label: t(lang, 'congested'), cls: 'text-orange-700' }
+      : { label: t(lang, 'severe'), cls: 'text-rose-700' };
 
   const searchResults = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -251,7 +247,7 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
           ? lang === 'en'
             ? 'Unlocked'
             : '已解鎖地區'
-          : `🔒 ${formatCurrencyWan(getDistrictUnlockCost(d, difficulty), lang)}`;
+          : `${formatCurrencyWan(getDistrictUnlockCost(d, difficulty), lang)}`;
         list.push({ id: `d_${d.id}`, label: d.name, kind: kindLabel, x: d.x, y: d.y });
       }
     }
@@ -260,68 +256,57 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
 
   return (
     <>
-      {/* TOP-LEFT FLOATING TIME & ERA ISLAND */}
+      {/* TOP-LEFT TIME & SPEED CONTROL BAR */}
       <div
-        className={`fixed top-4 left-4 z-30 ${glassIsland} rounded-2xl px-3.5 py-2.5 flex items-center gap-4`}
+        className={`fixed top-4 left-4 z-30 ${hudSurface} rounded-xl px-3.5 py-2 flex items-center gap-3.5`}
       >
-        <div className="relative w-10 h-10 shrink-0 flex items-center justify-center">
-          <svg className="w-10 h-10 -rotate-90" viewBox="0 0 36 36">
+        <div className="relative w-8 h-8 shrink-0 flex items-center justify-center">
+          <svg className="w-8 h-8 -rotate-90" viewBox="0 0 36 36">
             <circle
               cx="18"
               cy="18"
               r="14"
               fill="none"
-              stroke="rgba(148,163,184,0.18)"
-              strokeWidth="3"
+              stroke="#E2E8F0"
+              strokeWidth="3.2"
             />
             <circle
               cx="18"
               cy="18"
               r="14"
               fill="none"
-              stroke={hours >= 6 && hours < 19 ? '#38BDF8' : '#818CF8'}
-              strokeWidth="3"
+              stroke={hours >= 6 && hours < 19 ? '#2563EB' : '#475569'}
+              strokeWidth="3.2"
               strokeDasharray={`${dayProgress * 88} 88`}
               strokeLinecap="round"
             />
           </svg>
-          <div className="w-4 h-4 rounded-full bg-gradient-to-tr from-emerald-400 to-sky-400 opacity-90" />
         </div>
 
-        <div className="min-w-[155px]">
-          <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
-            <span>{map.name}</span>
-            <span>·</span>
-            <span className="text-sky-300">{demand.periodLabel}</span>
+        <div className="min-w-[148px]">
+          <div className="text-[11px] text-slate-500 flex items-center gap-1.5 whitespace-nowrap">
+            <span className="font-medium text-slate-700">{map.name}</span>
+            <span aria-hidden="true">·</span>
+            <span>{demand.periodLabel}</span>
+            <span aria-hidden="true" className="hidden md:inline">·</span>
+            <span className="hidden md:inline text-slate-600">{eraTitle}</span>
           </div>
-          <div className="flex items-baseline gap-2 mt-0.5">
-            <span className="text-sm font-bold text-slate-100 font-mono-tabular">
+          <div className="flex items-baseline gap-2 mt-0.5 whitespace-nowrap">
+            <span className="text-sm font-bold text-slate-950 font-mono-tabular">
               {year}年{month}月{dayOfMonth}日
             </span>
-            <span className="text-xs font-mono-tabular text-slate-300">{timeStr}</span>
+            <span className="text-xs font-mono-tabular text-slate-500">{timeStr}</span>
           </div>
         </div>
 
-        <div className="h-8 w-px bg-white/10 hidden sm:block" />
-
-        <div className="hidden md:flex flex-col justify-center min-w-[98px]">
-          <div className="text-[10px] text-slate-400 font-mono-tabular">
-            {year}–{year + 3}
-          </div>
-          <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-300 mt-0.5">
-            <span className="w-2 h-2 rounded-full bg-emerald-400" />
-            <span>{eraTitle}</span>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-1 bg-slate-950/60 border border-white/10 rounded-xl p-1">
+        <div className="flex items-center gap-0.5 bg-slate-100 border border-slate-200/80 rounded-lg p-0.5">
           <button
             onClick={() => onChangeSpeed(speed === 0 ? 1 : 0)}
             title={speed === 0 ? t(lang, 'resume') : t(lang, 'paused')}
-            className={`w-8 h-7 rounded-lg flex items-center justify-center transition-colors ${
+            className={`w-8 h-7 rounded-md flex items-center justify-center transition-colors cursor-pointer ${
               speed === 0
-                ? 'bg-amber-500 text-slate-950'
-                : 'bg-sky-500/20 text-sky-300 hover:bg-sky-500/30'
+                ? 'bg-amber-500 text-white'
+                : 'bg-white text-slate-900 shadow-2xs hover:bg-slate-50'
             }`}
           >
             {speed === 0 ? (
@@ -334,8 +319,10 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
             <button
               key={s}
               onClick={() => onChangeSpeed(s)}
-              className={`px-2 h-7 rounded-lg text-xs font-mono-tabular font-medium transition-colors ${
-                speed === s ? 'bg-white/15 text-white' : 'text-slate-400 hover:text-slate-200'
+              className={`px-2 h-7 rounded-md text-xs font-mono-tabular font-medium transition-colors cursor-pointer ${
+                speed === s
+                  ? 'bg-slate-900 text-white'
+                  : 'text-slate-600 hover:text-slate-950 hover:bg-white/70'
               }`}
             >
               {s}x
@@ -343,9 +330,9 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
           ))}
           <button
             onClick={onAdvanceMonth}
-            className="px-2 h-7 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-white/10 flex items-center gap-1 transition-colors"
+            className="px-2.5 h-7 rounded-md text-xs font-medium text-slate-700 hover:text-slate-950 hover:bg-white flex items-center gap-1 transition-colors whitespace-nowrap cursor-pointer"
           >
-            <CalendarPlus className="w-3 h-3 text-sky-400" />
+            <CalendarPlus className="w-3.5 h-3.5 text-blue-600" />
             <span>{t(lang, 'advanceMonth')}</span>
           </button>
         </div>
@@ -353,114 +340,83 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
 
       {/* TOP-CENTER PAUSE INDICATOR */}
       {speed === 0 && (
-        <div
+        <button
           onClick={() => onChangeSpeed(1)}
-          className={`fixed top-20 left-1/2 -translate-x-1/2 z-30 ${glassIsland} rounded-full px-4 py-1.5 flex items-center gap-2.5 text-xs cursor-pointer hover:border-amber-400/50 transition-colors`}
+          className={`fixed top-20 left-1/2 -translate-x-1/2 z-30 ${hudSurface} rounded-lg px-4 py-1.5 flex items-center gap-2.5 text-xs cursor-pointer hover:border-amber-400 transition-colors`}
         >
-          <span className="text-amber-300 font-semibold">⏸ {t(lang, 'paused')}</span>
-          <span className="px-1.5 py-0.5 rounded bg-white/10 text-slate-300 font-mono-tabular text-[10px]">
-            {t(lang, 'space')}
-          </span>
-          <span className="text-slate-400">{t(lang, 'resume')}</span>
-        </div>
+          <span className="text-amber-700 font-semibold">{t(lang, 'paused')}</span>
+          <span className="text-slate-300" aria-hidden="true">|</span>
+          <span className="font-mono-tabular text-[11px] text-slate-600">{t(lang, 'space')}</span>
+          <span className="text-slate-500">{t(lang, 'resume')}</span>
+        </button>
       )}
 
-      {/* TOP-RIGHT INTERACTIVE KPI TELEMETRY & UTILITY ISLANDS */}
-      <div className="fixed top-4 right-4 z-30 flex items-center gap-2.5">
-        <div className={`hidden xl:flex ${glassIsland} rounded-2xl p-1.5 items-center gap-1`}>
-          {/* 1. Funds / Finance KPI */}
+      {/* TOP-RIGHT KPI STRIP & UTILITY ACTIONS */}
+      <div className="fixed top-4 right-4 z-30 flex items-center gap-2">
+        <div
+          className={`hidden xl:flex ${hudSurface} rounded-xl py-1 px-1 items-center divide-x divide-slate-200`}
+        >
           <button
             onClick={() => setActiveKpi(activeKpi === 'finance' ? 'none' : 'finance')}
-            className={`px-3 py-1 rounded-xl flex items-center gap-2.5 text-left transition-colors ${
-              activeKpi === 'finance' ? 'bg-amber-500/15 ring-1 ring-amber-400/40' : 'hover:bg-white/6'
+            className={`px-3 py-1 rounded-lg text-left transition-colors cursor-pointer ${
+              activeKpi === 'finance' ? 'bg-slate-100' : 'hover:bg-slate-50'
             }`}
           >
-            <div className="w-7 h-7 rounded-full bg-amber-500/15 border border-amber-400/30 flex items-center justify-center text-amber-300">
-              <Coins className="w-3.5 h-3.5" />
-            </div>
-            <div>
-              <div className="text-[10px] text-slate-400">{t(lang, 'funds')}</div>
-              <div className="text-sm font-bold font-mono-tabular text-slate-100">
-                {formatCurrencyWan(money, lang)}
-              </div>
+            <div className="text-[10px] text-slate-500 whitespace-nowrap">{t(lang, 'funds')}</div>
+            <div className="text-sm font-bold font-mono-tabular text-slate-950 whitespace-nowrap">
+              {formatCurrencyWan(money, lang)}
             </div>
           </button>
 
-          <div className="h-7 w-px bg-white/10" />
-
-          {/* 2. Population KPI */}
           <button
             onClick={() => setActiveKpi(activeKpi === 'population' ? 'none' : 'population')}
-            className={`px-3 py-1 rounded-xl flex items-center gap-2.5 text-left transition-colors ${
-              activeKpi === 'population' ? 'bg-sky-500/15 ring-1 ring-sky-400/40' : 'hover:bg-white/6'
+            className={`px-3 py-1 rounded-lg text-left transition-colors cursor-pointer ${
+              activeKpi === 'population' ? 'bg-slate-100' : 'hover:bg-slate-50'
             }`}
           >
-            <div className="w-7 h-7 rounded-full bg-sky-500/15 border border-sky-400/30 flex items-center justify-center text-sky-300">
-              <Users className="w-3.5 h-3.5" />
-            </div>
-            <div>
-              <div className="text-[10px] text-slate-400">{t(lang, 'population')}</div>
-              <div className="text-sm font-bold font-mono-tabular text-slate-100">
-                {formatPop(stats.totalPopulation, lang)}
-              </div>
+            <div className="text-[10px] text-slate-500 whitespace-nowrap">{t(lang, 'population')}</div>
+            <div className="text-sm font-bold font-mono-tabular text-slate-950 whitespace-nowrap">
+              {formatPop(stats.totalPopulation, lang)}
             </div>
           </button>
 
-          <div className="h-7 w-px bg-white/10" />
-
-          {/* 3. Metro Mode Share KPI */}
           <button
             onClick={() => setActiveKpi(activeKpi === 'share' ? 'none' : 'share')}
-            className={`px-3 py-1 rounded-xl flex items-center gap-2.5 text-left transition-colors ${
-              activeKpi === 'share' ? 'bg-teal-500/15 ring-1 ring-teal-400/40' : 'hover:bg-white/6'
+            className={`px-3 py-1 rounded-lg text-left transition-colors cursor-pointer ${
+              activeKpi === 'share' ? 'bg-slate-100' : 'hover:bg-slate-50'
             }`}
           >
-            <div className="w-7 h-7 rounded-full bg-teal-500/15 border border-teal-400/30 flex items-center justify-center text-teal-300">
-              <TrainFront className="w-3.5 h-3.5" />
-            </div>
-            <div>
-              <div className="text-[10px] text-slate-400">{t(lang, 'metroShare')}</div>
-              <div className="text-sm font-bold font-mono-tabular text-slate-100">
-                {stats.modeSharePercent.toFixed(1)}%
-              </div>
+            <div className="text-[10px] text-slate-500 whitespace-nowrap">{t(lang, 'metroShare')}</div>
+            <div className="text-sm font-bold font-mono-tabular text-slate-950 whitespace-nowrap">
+              {stats.modeSharePercent.toFixed(1)}%
             </div>
           </button>
 
-          <div className="h-7 w-px bg-white/10" />
-
-          {/* 4. Congestion Index KPI */}
           <button
             onClick={() => setActiveKpi(activeKpi === 'congestion' ? 'none' : 'congestion')}
-            className={`px-3 py-1 rounded-xl flex items-center gap-2.5 text-left transition-colors ${
-              activeKpi === 'congestion'
-                ? 'bg-emerald-500/15 ring-1 ring-emerald-400/40'
-                : 'hover:bg-white/6'
+            className={`px-3 py-1 rounded-lg text-left transition-colors cursor-pointer ${
+              activeKpi === 'congestion' ? 'bg-slate-100' : 'hover:bg-slate-50'
             }`}
           >
-            <div className="w-7 h-7 rounded-full bg-emerald-500/15 border border-emerald-400/30 flex items-center justify-center text-emerald-300">
-              <CarFront className="w-3.5 h-3.5" />
-            </div>
-            <div>
-              <div className="text-[10px] text-slate-400">{t(lang, 'congestionIdx')}</div>
-              <div className="text-sm font-bold font-mono-tabular text-slate-100 flex items-baseline gap-1.5">
-                <span>{stats.congestionIndex.toFixed(2)}</span>
-                <span className={`text-[11px] font-medium ${congestionStatus.cls}`}>
-                  {congestionStatus.label}
-                </span>
-              </div>
+            <div className="text-[10px] text-slate-500 whitespace-nowrap">{t(lang, 'congestionIdx')}</div>
+            <div className="text-sm font-bold font-mono-tabular text-slate-950 flex items-baseline gap-1.5 whitespace-nowrap">
+              <span>{stats.congestionIndex.toFixed(2)}</span>
+              <span className={`text-[11px] font-semibold ${congestionStatus.cls}`}>
+                {congestionStatus.label}
+              </span>
             </div>
           </button>
         </div>
 
-        {/* Utility Action Island */}
-        <div className={`${glassIsland} rounded-2xl p-1.5 flex items-center gap-1`}>
+        {/* Utility Toolbar */}
+        <div className={`${hudSurface} rounded-xl p-1 flex items-center gap-0.5`}>
           <button
             onClick={() => setOpenDrawer(openDrawer === 'search' ? 'none' : 'search')}
             title={t(lang, 'searchPlaceholder')}
-            className={`w-9 h-9 rounded-xl flex items-center justify-center transition-colors ${
+            className={`w-9 h-9 rounded-lg flex items-center justify-center transition-colors cursor-pointer ${
               openDrawer === 'search'
-                ? 'bg-sky-500/25 text-sky-300'
-                : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                ? 'bg-slate-900 text-white'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
             }`}
           >
             <Search className="w-4 h-4" />
@@ -468,48 +424,50 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
           <button
             onClick={onOpenCityStats}
             title={t(lang, 'cityStats')}
-            className="w-9 h-9 rounded-xl hover:bg-white/10 flex items-center justify-center text-slate-300 hover:text-white transition-colors"
+            className="w-9 h-9 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-600 hover:text-slate-950 transition-colors cursor-pointer"
           >
             <BarChart3 className="w-4 h-4" />
           </button>
           <button
             onClick={onOpenNetworkMap}
             title={t(lang, 'networkMap')}
-            className="w-9 h-9 rounded-xl hover:bg-white/10 flex items-center justify-center text-slate-300 hover:text-white transition-colors"
+            className="w-9 h-9 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-600 hover:text-slate-950 transition-colors cursor-pointer"
           >
             <Network className="w-4 h-4" />
           </button>
           <button
             onClick={() => setOpenDrawer(openDrawer === 'lang' ? 'none' : 'lang')}
             title="語言 / Language"
-            className="px-2 h-9 rounded-xl hover:bg-white/10 flex items-center gap-1 text-[11px] font-semibold text-slate-300 hover:text-white transition-colors"
+            className="px-2.5 h-9 rounded-lg hover:bg-slate-100 flex items-center gap-1 text-[11px] font-semibold text-slate-700 hover:text-slate-950 transition-colors cursor-pointer"
           >
-            <Globe className="w-3.5 h-3.5 text-sky-400" />
+            <Globe className="w-3.5 h-3.5 text-slate-500" />
             <span>{LANG_LABELS[lang]}</span>
           </button>
           <button
             onClick={onOpenSetup}
-            title="地圖與難度"
-            className="w-9 h-9 rounded-xl hover:bg-white/10 flex items-center justify-center text-slate-300 hover:text-white transition-colors"
+            title="開局與難度設定"
+            className="w-9 h-9 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-600 hover:text-slate-950 transition-colors cursor-pointer"
           >
             <MapIcon className="w-4 h-4" />
           </button>
           <button
             onClick={onOpenGdd}
             title="系統設計文件 (GDD)"
-            className="w-9 h-9 rounded-xl hover:bg-white/10 flex items-center justify-center text-slate-300 hover:text-white transition-colors"
+            className="w-9 h-9 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-600 hover:text-slate-950 transition-colors cursor-pointer"
           >
             <FileText className="w-4 h-4" />
           </button>
           <button
             onClick={onToggleMute}
-            className="w-9 h-9 rounded-xl hover:bg-white/10 flex items-center justify-center text-slate-300 hover:text-white transition-colors"
+            title={muted ? '開啟音效' : '靜音'}
+            className="w-9 h-9 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-600 hover:text-slate-950 transition-colors cursor-pointer"
           >
             {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
           </button>
           <button
             onClick={onReturnTitle}
-            className="w-9 h-9 rounded-xl hover:bg-white/10 flex items-center justify-center text-slate-300 hover:text-white transition-colors"
+            title="返回主畫面"
+            className="w-9 h-9 rounded-lg hover:bg-slate-100 flex items-center justify-center text-slate-600 hover:text-slate-950 transition-colors cursor-pointer"
           >
             <Home className="w-4 h-4" />
           </button>
@@ -538,7 +496,7 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
       {/* SEARCH JUMP POPOVER */}
       {openDrawer === 'search' && (
         <div
-          className={`fixed top-18 right-24 z-35 w-80 ${glassIsland} rounded-2xl p-3 space-y-2.5`}
+          className={`fixed top-18 right-24 z-35 w-80 ${hudSurface} rounded-xl p-3 space-y-2.5`}
         >
           <div className="relative">
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -548,18 +506,18 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={t(lang, 'searchPlaceholder')}
-              className="w-full pl-8 pr-7 py-2 rounded-xl bg-slate-950/70 border border-white/10 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
+              className="w-full pl-8 pr-7 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-blue-600"
             />
             <button
               onClick={() => setOpenDrawer('none')}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-800"
             >
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
-          <div className="max-h-56 overflow-y-auto space-y-1">
+          <div className="max-h-56 overflow-y-auto divide-y divide-slate-100">
             {searchResults.length === 0 ? (
-              <div className="text-xs text-slate-500 py-3 text-center">
+              <div className="text-xs text-slate-400 py-3 text-center">
                 {t(lang, 'noSearchMatch')}
               </div>
             ) : (
@@ -570,10 +528,12 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                     onSearchJump(item.x, item.y, item.label);
                     setOpenDrawer('none');
                   }}
-                  className="w-full flex items-center justify-between px-2.5 py-2 rounded-lg hover:bg-white/8 text-xs text-slate-200 transition-colors"
+                  className="w-full flex items-center justify-between px-2.5 py-2 hover:bg-slate-50 text-xs text-slate-800 transition-colors text-left cursor-pointer"
                 >
                   <span className="truncate font-medium">{item.label}</span>
-                  <span className="text-[10px] text-sky-300 shrink-0 ml-2">{item.kind}</span>
+                  <span className="text-[11px] text-slate-500 shrink-0 ml-2 font-mono-tabular">
+                    {item.kind}
+                  </span>
                 </button>
               ))
             )}
@@ -583,7 +543,7 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
 
       {/* LANGUAGE SWITCHER POPOVER */}
       {openDrawer === 'lang' && (
-        <div className={`fixed top-18 right-16 z-35 w-36 ${glassIsland} rounded-2xl p-1.5 space-y-1`}>
+        <div className={`fixed top-18 right-16 z-35 w-36 ${hudSurface} rounded-xl p-1 space-y-0.5`}>
           {(['zh-Hant', 'zh-Hans', 'en'] as Language[]).map((l) => (
             <button
               key={l}
@@ -591,8 +551,8 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                 onChangeLang(l);
                 setOpenDrawer('none');
               }}
-              className={`w-full px-3 py-1.5 rounded-xl text-xs font-medium text-left flex items-center justify-between transition-colors ${
-                lang === l ? 'bg-sky-500/25 text-sky-200' : 'text-slate-300 hover:bg-white/8'
+              className={`w-full px-3 py-1.5 rounded-lg text-xs font-medium text-left flex items-center justify-between transition-colors cursor-pointer ${
+                lang === l ? 'bg-slate-900 text-white' : 'text-slate-700 hover:bg-slate-100'
               }`}
             >
               <span>{l === 'zh-Hant' ? '繁體中文' : l === 'zh-Hans' ? '简体中文' : 'English'}</span>
@@ -602,15 +562,15 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
         </div>
       )}
 
-      {/* BOTTOM-LEFT VERTICAL FLOATING DOCK */}
+      {/* BOTTOM-LEFT VERTICAL DOCK */}
       <div className="fixed bottom-4 left-4 z-30 flex flex-col gap-3">
-        <div className={`${glassIsland} rounded-2xl p-1.5 flex flex-col items-center gap-1 w-13`}>
+        <div className={`${hudSurface} rounded-xl p-1 flex flex-col items-center gap-0.5 w-13`}>
           <button
             onClick={() => setOpenDrawer(openDrawer === 'layers' ? 'none' : 'layers')}
-            className={`w-10 py-2 rounded-xl flex flex-col items-center gap-0.5 text-[10px] transition-colors ${
+            className={`w-10 py-2 rounded-lg flex flex-col items-center gap-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
               openDrawer === 'layers'
-                ? 'bg-sky-500/25 text-sky-300'
-                : 'text-slate-300 hover:bg-white/10'
+                ? 'bg-slate-900 text-white'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
             }`}
           >
             <Layers className="w-4 h-4" />
@@ -620,8 +580,8 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
           <button
             onClick={onToggle25D}
             title="切換 2.5D 視角 (快捷鍵 T)"
-            className={`w-10 py-2 rounded-xl flex flex-col items-center gap-0.5 text-[10px] transition-colors ${
-              is25D ? 'bg-sky-500 text-white' : 'text-slate-300 hover:bg-white/10'
+            className={`w-10 py-2 rounded-lg flex flex-col items-center gap-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
+              is25D ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
             }`}
           >
             <Box className="w-4 h-4" />
@@ -630,34 +590,36 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
 
           <button
             onClick={() => setOpenDrawer(openDrawer === 'depth' ? 'none' : 'depth')}
-            className={`w-10 py-2 rounded-xl flex flex-col items-center gap-0.5 text-[10px] transition-colors ${
+            className={`w-10 py-2 rounded-lg flex flex-col items-center gap-0.5 text-[10px] font-medium transition-colors cursor-pointer ${
               layers.depthFilter !== 'ALL' || openDrawer === 'depth'
-                ? 'bg-sky-500/25 text-sky-300'
-                : 'text-slate-300 hover:bg-white/10'
+                ? 'bg-slate-900 text-white'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
             }`}
           >
             <ArrowUpDown className="w-4 h-4" />
             <span>{layers.depthFilter === 'ALL' ? t(lang, 'depthView') : layers.depthFilter}</span>
           </button>
 
-          <div className="w-7 h-px bg-white/10 my-0.5" />
+          <div className="w-7 h-px bg-slate-200 my-1" />
 
           <button
             onClick={onZoomIn}
-            className="w-10 h-8 rounded-xl flex items-center justify-center text-slate-300 hover:bg-white/10 hover:text-white transition-colors"
+            title="放大"
+            className="w-10 h-8 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100 hover:text-slate-950 transition-colors cursor-pointer"
           >
             <Plus className="w-4 h-4" />
           </button>
           <button
             onClick={onZoomOut}
-            className="w-10 h-8 rounded-xl flex items-center justify-center text-slate-300 hover:bg-white/10 hover:text-white transition-colors"
+            title="縮小"
+            className="w-10 h-8 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100 hover:text-slate-950 transition-colors cursor-pointer"
           >
             <Minus className="w-4 h-4" />
           </button>
           <button
             onClick={onResetView}
             title={t(lang, 'resetView')}
-            className="w-10 h-8 rounded-xl flex items-center justify-center text-slate-300 hover:bg-white/10 hover:text-white transition-colors"
+            className="w-10 h-8 rounded-lg flex items-center justify-center text-slate-600 hover:bg-slate-100 hover:text-slate-950 transition-colors cursor-pointer"
           >
             <Compass className="w-4 h-4" />
           </button>
@@ -667,52 +629,55 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
       {/* LEFT-DOCK POPOVER: LAYERS */}
       {openDrawer === 'layers' && (
         <div
-          className={`fixed bottom-20 left-20 z-30 w-60 ${glassIsland} rounded-2xl p-3.5 space-y-2`}
+          className={`fixed bottom-20 left-20 z-30 w-64 ${hudSurface} rounded-xl p-3.5 space-y-2.5`}
         >
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-200 pb-1 border-b border-white/10">
+          <div className="flex items-center justify-between text-xs font-semibold text-slate-900 pb-2 border-b border-slate-200">
             <span>{t(lang, 'layers')}</span>
-            <button onClick={() => setOpenDrawer('none')} className="text-slate-400 hover:text-white">
+            <button onClick={() => setOpenDrawer('none')} className="text-slate-400 hover:text-slate-900">
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
-          {[
-            { key: 'populationHeatmap' as const, label: '人口與職缺熱區' },
-            { key: 'metroCoverageOverlay' as const, label: '地鐵覆蓋與盲區 (綠/紅)' },
-            { key: 'zones' as const, label: '都市用地分區' },
-            { key: 'catchmentRings' as const, label: '車站步行覆蓋圈' },
-            { key: 'congestionOverlay' as const, label: '地面道路飽和度' },
-          ].map((item) => (
-            <label
-              key={item.key}
-              className="flex items-center justify-between text-xs text-slate-300 py-1 cursor-pointer hover:text-white"
-            >
-              <span>{item.label}</span>
-              <input
-                type="checkbox"
-                checked={layers[item.key]}
-                onChange={() => onToggleLayer(item.key)}
-                className="w-4 h-4 accent-sky-500 rounded"
-              />
-            </label>
-          ))}
+          <div className="space-y-1">
+            {[
+              { key: 'populationHeatmap' as const, label: '人口與職缺熱區' },
+              { key: 'metroCoverageOverlay' as const, label: '地鐵覆蓋與盲區 (綠/紅)' },
+              { key: 'zones' as const, label: '都市用地分區' },
+              { key: 'catchmentRings' as const, label: '車站步行覆蓋圈' },
+              { key: 'congestionOverlay' as const, label: '地面道路飽和度' },
+            ].map((item) => (
+              <label
+                key={item.key}
+                className="flex items-center justify-between text-xs text-slate-700 py-1 cursor-pointer hover:text-slate-950"
+              >
+                <span>{item.label}</span>
+                <input
+                  type="checkbox"
+                  checked={layers[item.key]}
+                  onChange={() => onToggleLayer(item.key)}
+                  className="w-4 h-4 accent-blue-600 rounded"
+                />
+              </label>
+            ))}
+          </div>
 
           {map.geoBounds && (
-            <div className="pt-2 border-t border-white/10 space-y-1.5">
-              <div className="text-[11px] font-semibold text-slate-400">地圖底圖樣式</div>
+            <div className="pt-2.5 border-t border-slate-200 space-y-1.5">
+              <div className="text-[11px] font-semibold text-slate-500">地圖底圖樣式</div>
               <div className="grid grid-cols-1 gap-1">
                 {(
                   [
-                    { id: 'esri_dark_gray' as const, label: 'Esri 深灰底圖 (免金鑰)' },
-                    { id: 'canvas_vector' as const, label: '純淨向量河流底圖 (GeoJSON)' },
+                    { id: 'esri_light_gray' as const, label: 'Esri 簡約淺灰地圖 (預設)' },
+                    { id: 'canvas_vector' as const, label: '純淨向量白圖 (離線可用)' },
+                    { id: 'esri_dark_gray' as const, label: 'Esri 夜間深灰地圖' },
                   ]
                 ).map((stOpt) => (
                   <button
                     key={stOpt.id}
                     onClick={() => onChangeOpenMapStyle(stOpt.id)}
-                    className={`px-2.5 py-1.5 rounded-lg text-[11px] text-left font-medium transition-colors ${
+                    className={`px-2.5 py-1.5 rounded-lg text-[11px] text-left font-medium transition-colors cursor-pointer ${
                       openMapStyle === stOpt.id
-                        ? 'bg-sky-500/25 border border-sky-400/50 text-sky-200'
-                        : 'bg-white/5 text-slate-300 hover:bg-white/10'
+                        ? 'bg-slate-900 text-white'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80'
                     }`}
                   >
                     {stOpt.label}
@@ -727,21 +692,21 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
       {/* LEFT-DOCK POPOVER: DEPTH FILTER */}
       {openDrawer === 'depth' && (
         <div
-          className={`fixed bottom-20 left-20 z-30 w-52 ${glassIsland} rounded-2xl p-3.5 space-y-2`}
+          className={`fixed bottom-20 left-20 z-30 w-52 ${hudSurface} rounded-xl p-3.5 space-y-2.5`}
         >
-          <div className="flex items-center justify-between text-xs font-semibold text-slate-200 pb-1 border-b border-white/10">
+          <div className="flex items-center justify-between text-xs font-semibold text-slate-900 pb-2 border-b border-slate-200">
             <span>{t(lang, 'depthView')}</span>
-            <button onClick={() => setOpenDrawer('none')} className="text-slate-400 hover:text-white">
+            <button onClick={() => setOpenDrawer('none')} className="text-slate-400 hover:text-slate-900">
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
           <div className="grid grid-cols-2 gap-1.5">
             <button
               onClick={() => onChangeDepthFilter('ALL')}
-              className={`py-1.5 text-xs rounded-lg font-medium ${
+              className={`py-1.5 text-xs rounded-lg font-medium cursor-pointer ${
                 layers.depthFilter === 'ALL'
-                  ? 'bg-sky-500 text-white'
-                  : 'bg-white/5 text-slate-300 hover:bg-white/10'
+                  ? 'bg-slate-900 text-white'
+                  : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80'
               }`}
             >
               {t(lang, 'allDepth')}
@@ -750,10 +715,10 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
               <button
                 key={d.id}
                 onClick={() => onChangeDepthFilter(d.id)}
-                className={`py-1.5 text-xs rounded-lg font-medium ${
+                className={`py-1.5 text-xs rounded-lg font-medium cursor-pointer ${
                   layers.depthFilter === d.id
-                    ? 'bg-sky-500 text-white'
-                    : 'bg-white/5 text-slate-300 hover:bg-white/10'
+                    ? 'bg-slate-900 text-white'
+                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80'
                 }`}
               >
                 {d.shortLabel}
@@ -763,36 +728,36 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
         </div>
       )}
 
-      {/* FLOATING DRAFT COMMIT BAR (when draft items exist) */}
+      {/* FLOATING DRAFT COMMIT BAR */}
       {draftCount > 0 && (
         <div
-          className={`fixed left-1/2 -translate-x-1/2 z-30 ${glassIsland} border-sky-400/35 rounded-2xl px-4 py-2 flex items-center gap-3 ${
+          className={`fixed left-1/2 -translate-x-1/2 z-30 ${hudSurface} border-blue-500/40 rounded-xl px-4 py-2 flex items-center gap-3 ${
             tool === 'station' || tool === 'track' ? 'bottom-40' : 'bottom-24'
           }`}
         >
           <div className="flex items-center gap-2 text-xs">
-            <span className="font-semibold text-sky-300">
+            <span className="font-semibold text-blue-700">
               {t(lang, 'draftItems')} {draftCount} {t(lang, 'itemsSuffix')}
             </span>
-            <span className="font-mono-tabular font-bold text-slate-100">
+            <span className="font-mono-tabular font-bold text-slate-950">
               {formatCurrencyWan(draftCostWan, lang)}
             </span>
             {draftWarnings > 0 && (
-              <span className="flex items-center gap-1 text-amber-400 font-mono-tabular">
+              <span className="flex items-center gap-1 text-amber-700 font-mono-tabular">
                 <AlertTriangle className="w-3.5 h-3.5" />
                 {draftWarnings}
               </span>
             )}
           </div>
 
-          <div className="h-4 w-px bg-white/10" />
+          <div className="h-4 w-px bg-slate-200" />
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5">
             <button
               onClick={onUndoDraft}
               disabled={!canUndoDraft}
               title={t(lang, 'undo')}
-              className="p-1.5 rounded-lg text-slate-300 hover:bg-white/10 disabled:opacity-35"
+              className="p-1.5 rounded-lg text-slate-600 hover:bg-slate-100 disabled:opacity-35 cursor-pointer"
             >
               <Undo2 className="w-3.5 h-3.5" />
             </button>
@@ -800,7 +765,7 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
               onClick={onRedoDraft}
               disabled={!canRedoDraft}
               title={t(lang, 'redo')}
-              className="p-1.5 rounded-lg text-slate-300 hover:bg-white/10 disabled:opacity-35"
+              className="p-1.5 rounded-lg text-slate-600 hover:bg-slate-100 disabled:opacity-35 cursor-pointer"
             >
               <Redo2 className="w-3.5 h-3.5" />
             </button>
@@ -808,14 +773,14 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
 
           <button
             onClick={onDiscardDraft}
-            className="px-2.5 py-1 rounded-lg bg-white/8 hover:bg-rose-500/20 text-xs text-slate-300 hover:text-rose-200 transition-colors"
+            className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-rose-50 text-xs text-slate-700 hover:text-rose-700 transition-colors cursor-pointer"
           >
             {t(lang, 'discardDraft')}
           </button>
 
           <button
             onClick={onConfirmDraft}
-            className="px-3.5 py-1 rounded-lg bg-sky-500 hover:bg-sky-400 text-xs font-semibold text-white flex items-center gap-1.5 shadow-lg shadow-sky-500/25 transition-colors"
+            className="px-3.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-xs font-semibold text-white flex items-center gap-1.5 transition-colors cursor-pointer"
           >
             <Check className="w-3.5 h-3.5" />
             <span>{t(lang, 'confirmBuild')}</span>
@@ -823,28 +788,30 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
         </div>
       )}
 
-      {/* BOTTOM-CENTER CONTEXTUAL TRAY (build station, draw track) */}
+      {/* BOTTOM-CENTER CONTEXTUAL TRAY */}
       {(tool === 'station' || tool === 'track') && (
         <div
-          className={`fixed bottom-24 left-1/2 -translate-x-1/2 z-30 ${glassIsland} rounded-2xl px-4 py-2 flex flex-col gap-2 max-w-[92vw]`}
+          className={`fixed bottom-24 left-1/2 -translate-x-1/2 z-30 ${hudSurface} rounded-xl px-4 py-2.5 flex flex-col gap-2 max-w-[92vw]`}
         >
           {tool === 'station' && (
             <>
-              <div className="flex items-center justify-between gap-4 text-[11px] text-slate-400">
+              <div className="flex items-center justify-between gap-4 text-[11px] text-slate-500">
                 <span>{t(lang, 'stationHint')}</span>
-                <label className="flex items-center gap-1.5 cursor-pointer text-slate-300 hover:text-white">
+                <label className="flex items-center gap-1.5 cursor-pointer text-slate-700 hover:text-slate-950 whitespace-nowrap">
                   <input
                     type="checkbox"
                     checked={draftMode}
                     onChange={onToggleDraftMode}
-                    className="w-3.5 h-3.5 accent-sky-500 rounded"
+                    className="w-3.5 h-3.5 accent-blue-600 rounded"
                   />
                   <span>{draftMode ? t(lang, 'draftMode') : t(lang, 'instantMode')}</span>
                 </label>
               </div>
               <div className="flex items-center gap-3 overflow-x-auto">
                 <div className="flex items-center gap-1">
-                  <span className="text-[11px] text-slate-400 mr-1">{t(lang, 'methodLabel')}:</span>
+                  <span className="text-[11px] text-slate-500 mr-1 whitespace-nowrap">
+                    {t(lang, 'methodLabel')}:
+                  </span>
                   {(
                     [
                       { id: 'underground' as const, label: t(lang, 'underground') },
@@ -855,10 +822,10 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                     <button
                       key={m.id}
                       onClick={() => onSelectElevationMode(m.id)}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
+                      className={`px-2.5 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-colors cursor-pointer ${
                         elevationMode === m.id
-                          ? 'bg-sky-500 text-white'
-                          : 'bg-white/5 text-slate-300 hover:bg-white/10'
+                          ? 'bg-slate-900 text-white'
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80'
                       }`}
                     >
                       {m.label}
@@ -867,15 +834,15 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                 </div>
 
                 {elevationMode === 'underground' && (
-                  <div className="flex items-center gap-0.5 bg-slate-950/60 p-0.5 rounded-lg border border-white/8">
+                  <div className="flex items-center gap-0.5 bg-slate-100 p-0.5 rounded-lg border border-slate-200">
                     {DEPTH_LEVELS.filter((d) => d.id !== 'EL').map((d) => (
                       <button
                         key={d.id}
                         onClick={() => onSelectDepth(d.id)}
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono-tabular ${
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono-tabular font-medium cursor-pointer ${
                           activeDepth === d.id
-                            ? 'bg-amber-500/25 text-amber-300'
-                            : 'text-slate-400 hover:text-white'
+                            ? 'bg-white text-slate-950 shadow-2xs'
+                            : 'text-slate-500 hover:text-slate-900'
                         }`}
                       >
                         {d.id}
@@ -884,10 +851,12 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                   </div>
                 )}
 
-                <div className="h-5 w-px bg-white/10 shrink-0" />
+                <div className="h-5 w-px bg-slate-200 shrink-0" />
 
                 <div className="flex items-center gap-1">
-                  <span className="text-[11px] text-slate-400 mr-1">{t(lang, 'scaleLabel')}:</span>
+                  <span className="text-[11px] text-slate-500 mr-1 whitespace-nowrap">
+                    {t(lang, 'scaleLabel')}:
+                  </span>
                   {(
                     [
                       { id: 'small' as const, label: t(lang, 'small') },
@@ -899,10 +868,10 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                     <button
                       key={sz.id}
                       onClick={() => onSelectStationSize(sz.id)}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
+                      className={`px-2.5 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-colors cursor-pointer ${
                         stationSize === sz.id
-                          ? 'bg-sky-500 text-white'
-                          : 'bg-white/5 text-slate-300 hover:bg-white/10'
+                          ? 'bg-slate-900 text-white'
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80'
                       }`}
                     >
                       {sz.label}
@@ -920,14 +889,14 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                   <button
                     key={line.id}
                     onClick={() => onSelectLine(line.id)}
-                    className={`px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 whitespace-nowrap transition-colors ${
+                    className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 whitespace-nowrap transition-colors cursor-pointer ${
                       line.id === activeLineId
-                        ? 'bg-white/15 text-white border border-white/25'
-                        : 'text-slate-300 hover:bg-white/10'
+                        ? 'bg-slate-900 text-white'
+                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200/80'
                     }`}
                   >
                     <span
-                      className="w-2.5 h-2.5 rounded-full"
+                      className="w-2.5 h-2.5 rounded-full shrink-0"
                       style={{ backgroundColor: line.color }}
                     />
                     <span>{line.name}</span>
@@ -935,49 +904,49 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                 ))}
                 <button
                   onClick={onCreateLine}
-                  className="px-2 py-1.5 rounded-lg text-xs text-sky-300 hover:bg-sky-500/15 flex items-center gap-1 whitespace-nowrap"
+                  className="px-2.5 py-1 rounded-lg text-xs font-medium text-blue-700 hover:bg-blue-50 flex items-center gap-1 whitespace-nowrap cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>新線</span>
                 </button>
               </div>
-              <div className="h-5 w-px bg-white/10 shrink-0" />
+              <div className="h-5 w-px bg-slate-200 shrink-0" />
               <div className="flex items-center gap-1">
                 {DEPTH_LEVELS.map((d) => (
                   <button
                     key={d.id}
                     onClick={() => onSelectDepth(d.id)}
-                    className={`px-2 py-1 rounded-lg text-xs font-mono-tabular whitespace-nowrap transition-colors ${
+                    className={`px-2 py-1 rounded-lg text-xs font-mono-tabular font-medium whitespace-nowrap transition-colors cursor-pointer ${
                       activeDepth === d.id
-                        ? 'bg-amber-500/25 text-amber-300 border border-amber-400/40'
-                        : 'text-slate-400 hover:text-white'
+                        ? 'bg-slate-900 text-white'
+                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
                     }`}
                   >
                     {d.shortLabel}
                   </button>
                 ))}
               </div>
-              <div className="h-5 w-px bg-white/10 shrink-0" />
-              <label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-300 whitespace-nowrap">
+              <div className="h-5 w-px bg-slate-200 shrink-0" />
+              <label className="flex items-center gap-1.5 cursor-pointer text-xs text-slate-700 whitespace-nowrap">
                 <input
                   type="checkbox"
                   checked={draftMode}
                   onChange={onToggleDraftMode}
-                  className="w-3.5 h-3.5 accent-sky-500 rounded"
+                  className="w-3.5 h-3.5 accent-blue-600 rounded"
                 />
                 <span>{draftMode ? t(lang, 'draftMode') : t(lang, 'instantMode')}</span>
               </label>
               {trackStartStationName && (
                 <>
-                  <div className="h-5 w-px bg-white/10 shrink-0" />
-                  <div className="flex items-center gap-2 text-xs text-sky-200 whitespace-nowrap">
+                  <div className="h-5 w-px bg-slate-200 shrink-0" />
+                  <div className="flex items-center gap-2 text-xs text-slate-800 whitespace-nowrap">
                     <span>
                       起點: <strong>{trackStartStationName}</strong>
                       {hasTrackWaypoint ? ' (已設彎道)' : ' · 點空地設彎道或點目標站'}
                     </span>
                     <button
                       onClick={onCancelTrackDraw}
-                      className="text-rose-300 hover:text-rose-200 underline"
+                      className="text-rose-600 hover:text-rose-800 underline cursor-pointer"
                     >
                       取消
                     </button>
@@ -986,13 +955,12 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
               )}
             </div>
           )}
-
         </div>
       )}
 
       {/* BOTTOM-CENTER PRIMARY ACTION DOCK */}
       <div
-        className={`fixed bottom-4 left-1/2 -translate-x-1/2 z-30 ${glassIsland} rounded-2xl p-1.5 flex items-center gap-1`}
+        className={`fixed bottom-4 left-1/2 -translate-x-1/2 z-30 ${hudSurface} rounded-xl p-1 flex items-center gap-1`}
       >
         {(
           [
@@ -1007,12 +975,12 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
             <button
               key={item.id}
               onClick={() => onSelectTool(item.id)}
-              className={`w-16 py-2 rounded-xl flex flex-col items-center justify-center gap-1 text-xs font-medium transition-all ${
+              className={`w-16 py-2 rounded-lg flex flex-col items-center justify-center gap-1 text-xs font-medium transition-colors cursor-pointer ${
                 active
                   ? item.id === 'demolish'
-                    ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/25'
-                    : 'bg-sky-500 text-white shadow-lg shadow-sky-500/25'
-                  : 'text-slate-300 hover:text-white hover:bg-white/8'
+                    ? 'bg-rose-600 text-white'
+                    : 'bg-slate-950 text-white'
+                  : 'text-slate-600 hover:text-slate-950 hover:bg-slate-100'
               }`}
             >
               {item.icon}
@@ -1022,18 +990,16 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
         })}
       </div>
 
-      {/* BOTTOM-RIGHT STATUS CHIPS (MetroCore + MetroCircle) */}
-      <div className="fixed bottom-4 right-4 z-30 flex items-center gap-2.5">
+      {/* BOTTOM-RIGHT OPERATION BUTTONS */}
+      <div className="fixed bottom-4 right-4 z-30 flex items-center gap-2">
         <button
           onClick={() => onOpenMetroCore('overview')}
-          className={`${glassIsland} rounded-2xl px-4 py-2.5 flex items-center gap-3 hover:border-sky-400/50 transition-colors`}
+          className={`${hudSurface} rounded-xl px-4 py-2.5 flex items-center gap-3 hover:border-slate-300 hover:bg-slate-50 transition-colors cursor-pointer`}
         >
-          <div className="w-8 h-8 rounded-full bg-sky-500/15 border border-sky-400/35 flex items-center justify-center text-sky-300">
-            <Cpu className="w-4 h-4" />
-          </div>
+          <Cpu className="w-4 h-4 text-slate-600" />
           <div className="text-left">
-            <div className="text-[10px] text-slate-400">{t(lang, 'metroCore')}</div>
-            <div className="text-sm font-bold font-mono-tabular text-slate-100">
+            <div className="text-[10px] text-slate-500">{t(lang, 'metroCore')}</div>
+            <div className="text-sm font-bold font-mono-tabular text-slate-950">
               {liveLines.length} {t(lang, 'linesUnit')}
             </div>
           </div>
@@ -1041,89 +1007,86 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
 
         <button
           onClick={onOpenMetroCircle}
-          className={`relative ${glassIsland} rounded-2xl px-4 py-2.5 flex items-center gap-3 hover:border-emerald-400/50 transition-colors`}
+          className={`relative ${hudSurface} rounded-xl px-4 py-2.5 flex items-center gap-3 hover:border-slate-300 hover:bg-slate-50 transition-colors cursor-pointer`}
         >
           {unreadCircleCount > 0 && (
-            <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-full bg-rose-500 text-white text-[10px] font-mono-tabular font-bold flex items-center justify-center shadow">
+            <span className="absolute -top-1.5 -right-1.5 min-w-5 h-5 px-1 rounded-md bg-rose-600 text-white text-[10px] font-mono-tabular font-bold flex items-center justify-center shadow-xs">
               {unreadCircleCount}
             </span>
           )}
-          <div
-            className={`w-8 h-8 rounded-full flex items-center justify-center ${
+          <Smile
+            className={`w-4 h-4 ${
               stats.satisfaction >= 70
-                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-400/35'
+                ? 'text-emerald-600'
                 : stats.satisfaction >= 45
-                ? 'bg-amber-500/20 text-amber-400 border border-amber-400/35'
-                : 'bg-rose-500/20 text-rose-400 border border-rose-400/35'
+                ? 'text-amber-600'
+                : 'text-rose-600'
             }`}
-          >
-            <Smile className="w-4 h-4" />
-          </div>
+          />
           <div className="text-left">
-            <div className="text-[10px] text-slate-400">{t(lang, 'metroCircle')}</div>
-            <div className="text-sm font-bold font-mono-tabular text-slate-100">
+            <div className="text-[10px] text-slate-500">{t(lang, 'metroCircle')}</div>
+            <div className="text-sm font-bold font-mono-tabular text-slate-950">
               {stats.satisfaction}
             </div>
           </div>
         </button>
       </div>
 
-      {/* FLOATING STATION INSPECTOR (Screenshot 4 rich 4-tier scale + elevation meters!) */}
+      {/* FLOATING STATION INSPECTOR */}
       {selectedStation && (
         <div
-          className={`fixed top-20 right-4 z-30 w-88 ${glassIsland} rounded-2xl p-4 space-y-3.5 max-h-[75vh] overflow-y-auto`}
+          className={`fixed top-20 right-4 z-30 w-88 ${hudSurface} rounded-xl p-4 space-y-3.5 max-h-[75vh] overflow-y-auto`}
         >
-          <div className="flex items-center justify-between gap-2 pb-2 border-b border-white/10">
+          <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-200">
             <input
               type="text"
               value={selectedStation.name}
               onChange={(e) => onUpdateStation(selectedStation.id, { name: e.target.value })}
-              className="flex-1 bg-slate-950/60 border border-white/15 rounded-lg px-2.5 py-1 text-sm font-semibold text-white focus:outline-none focus:border-sky-400"
+              className="flex-1 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-sm font-semibold text-slate-950 focus:outline-none focus:border-blue-600"
             />
             {selectedStation.isDraft && (
-              <span className="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 text-[10px] font-medium">
+              <span className="text-[11px] font-medium text-blue-700 shrink-0">
                 {t(lang, 'draftItems')}
               </span>
             )}
             <button
               onClick={() => onDeleteStation(selectedStation.id)}
               title="拆除車站"
-              className="p-1.5 text-slate-400 hover:text-rose-400 rounded-lg hover:bg-white/10"
+              className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-slate-100 cursor-pointer"
             >
               <Trash2 className="w-4 h-4" />
             </button>
             <button
               onClick={onClearSelectedStation}
-              className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-white/10"
+              className="p-1.5 text-slate-400 hover:text-slate-900 rounded-lg hover:bg-slate-100 cursor-pointer"
             >
               <X className="w-4 h-4" />
             </button>
           </div>
 
-          <div className="grid grid-cols-3 gap-2 text-center text-xs">
-            <div className="p-2 rounded-xl bg-slate-950/50 border border-white/5">
-              <div className="text-[10px] text-slate-400">候車中</div>
-              <div className="font-mono-tabular font-bold text-sky-300 mt-0.5">
+          <div className="grid grid-cols-3 divide-x divide-slate-200 py-1 text-center text-xs">
+            <div>
+              <div className="text-[10px] text-slate-500">候車中</div>
+              <div className="font-mono-tabular font-bold text-blue-700 mt-0.5">
                 {selectedStation.waiting.length}
               </div>
             </div>
-            <div className="p-2 rounded-xl bg-slate-950/50 border border-white/5">
-              <div className="text-[10px] text-slate-400">吞吐容量</div>
-              <div className="font-mono-tabular font-bold text-slate-100 mt-0.5">
+            <div>
+              <div className="text-[10px] text-slate-500">吞吐容量</div>
+              <div className="font-mono-tabular font-bold text-slate-900 mt-0.5">
                 {(STATION_CONFIGS[selectedStation.size].hourlyCapacity / 1000).toFixed(0)}k/時
               </div>
             </div>
-            <div className="p-2 rounded-xl bg-slate-950/50 border border-white/5">
-              <div className="text-[10px] text-slate-400">最大編組</div>
-              <div className="font-mono-tabular font-bold text-slate-100 mt-0.5">
+            <div>
+              <div className="text-[10px] text-slate-500">最大編組</div>
+              <div className="font-mono-tabular font-bold text-slate-900 mt-0.5">
                 {STATION_CONFIGS[selectedStation.size].maxCars} 節
               </div>
             </div>
           </div>
 
-          {/* 4-Tier Scale Grid matching Screenshot 4 */}
-          <div className="space-y-1.5">
-            <span className="text-[11px] font-medium text-slate-400">規模等級與造價</span>
+          <div className="space-y-1.5 pt-2 border-t border-slate-200">
+            <span className="text-[11px] font-semibold text-slate-600">規模等級與造價</span>
             <div className="grid grid-cols-2 gap-1.5">
               {(Object.keys(STATION_CONFIGS) as StationSize[]).map((sz) => {
                 const cfg = STATION_CONFIGS[sz];
@@ -1132,22 +1095,22 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                   <button
                     key={sz}
                     onClick={() => onUpgradeStation(selectedStation.id, sz)}
-                    className={`p-2 text-left rounded-xl border text-xs transition-colors ${
+                    className={`p-2.5 text-left rounded-lg border text-xs transition-colors cursor-pointer ${
                       active
-                        ? 'bg-sky-500/20 border-sky-400 text-white'
-                        : 'bg-slate-950/40 border-white/10 text-slate-300 hover:border-white/20'
+                        ? 'bg-blue-50/70 border-blue-600 text-slate-950'
+                        : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300 hover:bg-slate-50'
                     }`}
                   >
                     <div className="flex items-center justify-between font-semibold">
                       <span className="truncate">{cfg.label}</span>
-                      <span className="text-[10px] font-mono-tabular text-sky-300">
+                      <span className="text-[10px] font-mono-tabular text-blue-700">
                         {cfg.maxCars}節
                       </span>
                     </div>
-                    <div className="text-[10px] text-slate-400 font-mono-tabular mt-0.5">
+                    <div className="text-[10px] text-slate-500 font-mono-tabular mt-0.5">
                       {(cfg.hourlyCapacity / 1000).toFixed(0)}k/h · 維護 {cfg.maintenance}萬/日
                     </div>
-                    <div className="text-[10px] text-amber-300 font-mono-tabular">
+                    <div className="text-[10px] text-amber-700 font-medium font-mono-tabular">
                       造價 {formatCurrencyWan(cfg.cost, lang)}
                     </div>
                   </button>
@@ -1156,11 +1119,10 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
             </div>
           </div>
 
-          {/* Station Elevation & Rail Height Meters */}
-          <div className="space-y-2 pt-2 border-t border-white/10 text-xs">
+          <div className="space-y-2.5 pt-2.5 border-t border-slate-200 text-xs">
             <div className="flex items-center justify-between">
-              <span className="text-slate-300 font-medium">車站標高方式</span>
-              <div className="flex items-center gap-1 bg-slate-950/60 p-0.5 rounded-lg border border-white/10">
+              <span className="text-slate-700 font-medium">車站標高方式</span>
+              <div className="flex items-center gap-0.5 bg-slate-100 p-0.5 rounded-lg border border-slate-200">
                 {(
                   [
                     { id: 'underground' as const, label: t(lang, 'underground'), meters: -15, depth: 'B1' as TrackDepth },
@@ -1177,10 +1139,10 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                         depth: m.depth,
                       })
                     }
-                    className={`px-2 py-1 rounded-md text-[11px] font-medium ${
+                    className={`px-2 py-1 rounded-md text-[11px] font-medium cursor-pointer ${
                       selectedStation.elevationMode === m.id
-                        ? 'bg-sky-500 text-white'
-                        : 'text-slate-400 hover:text-white'
+                        ? 'bg-slate-900 text-white'
+                        : 'text-slate-600 hover:text-slate-950'
                     }`}
                   >
                     {m.label}
@@ -1191,8 +1153,8 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
 
             <div>
               <div className="flex justify-between mb-1">
-                <span className="text-slate-400">主站台軌面相對地面高度</span>
-                <span className="font-mono-tabular font-semibold text-sky-300">
+                <span className="text-slate-600">主站台軌面相對地面高度</span>
+                <span className="font-mono-tabular font-semibold text-blue-700">
                   {selectedStation.elevationMeters > 0
                     ? `+${selectedStation.elevationMeters}m`
                     : `${selectedStation.elevationMeters}m`}
@@ -1226,14 +1188,16 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                     depth,
                   });
                 }}
-                className="w-full accent-sky-400"
+                className="w-full accent-blue-600"
               />
             </div>
 
             <div>
               <div className="flex justify-between mb-1">
-                <span className="text-slate-400">月台擴建</span>
-                <span className="font-mono-tabular text-sky-300">{selectedStation.platforms} 座</span>
+                <span className="text-slate-600">月台擴建</span>
+                <span className="font-mono-tabular font-semibold text-blue-700">
+                  {selectedStation.platforms} 座
+                </span>
               </div>
               <input
                 type="range"
@@ -1248,13 +1212,13 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                     throughputCapacity: Math.round(baseTp * (0.7 + platforms * 0.18)),
                   });
                 }}
-                className="w-full accent-sky-400"
+                className="w-full accent-blue-600"
               />
             </div>
 
             <label className="flex items-center justify-between pt-1 cursor-pointer">
-              <span className="text-slate-300 flex items-center gap-1.5">
-                <Zap className="w-3.5 h-3.5 text-amber-400" />
+              <span className="text-slate-700 flex items-center gap-1.5">
+                <Zap className="w-3.5 h-3.5 text-amber-600" />
                 <span>設為快車停靠站</span>
               </span>
               <input
@@ -1263,7 +1227,7 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                 onChange={(e) =>
                   onUpdateStation(selectedStation.id, { isExpressStop: e.target.checked })
                 }
-                className="w-4 h-4 accent-amber-400 rounded"
+                className="w-4 h-4 accent-blue-600 rounded"
               />
             </label>
           </div>

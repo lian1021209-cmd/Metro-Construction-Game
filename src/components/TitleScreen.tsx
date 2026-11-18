@@ -2,12 +2,12 @@ import React, { useEffect, useRef } from 'react';
 import {
   Play,
   Clock,
-  Settings,
+  SlidersHorizontal,
   FileText,
-  HelpCircle,
   ChevronRight,
   Volume2,
   VolumeX,
+  Compass,
 } from 'lucide-react';
 
 interface TitleScreenProps {
@@ -27,7 +27,7 @@ interface IsoBuilding {
   d: number;
   h: number;
   kind: 'tower' | 'mid' | 'spire';
-  hue: 'sky' | 'amber' | 'slate';
+  hue: 'stone' | 'warm' | 'cool';
 }
 
 export const TitleScreen: React.FC<TitleScreenProps> = ({
@@ -46,14 +46,12 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
     if (!canvas) return;
     let rafId = 0;
 
-    // Build deterministic 3D isometric city diorama (18x18 grid)
+    // Deterministic daylight architectural paper-model city diorama (18x18 grid)
     const buildings: IsoBuilding[] = [];
     for (let gy = 0; gy < 18; gy++) {
       for (let gx = 0; gx < 18; gx++) {
-        // Leave river diagonal channel around gx + gy ~ 17..19
         const riverDist = Math.abs(gx - gy + 2);
         if (riverDist < 1.6) continue;
-        // Leave avenue corridors
         if (gx % 4 === 0 || gy % 4 === 0) continue;
 
         const distCenter = Math.hypot(gx - 9.5, gy - 8.5);
@@ -62,10 +60,10 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
         const seed = Math.abs(Math.sin(gx * 12.9898 + gy * 78.233) * 43758.5453) % 1;
         const isCore = distCenter < 4.5;
         const h = isCore
-          ? 38 + seed * 86
+          ? 36 + seed * 78
           : distCenter < 7.5
-          ? 18 + seed * 36
-          : 10 + seed * 16;
+          ? 16 + seed * 32
+          : 9 + seed * 14;
 
         buildings.push({
           gx,
@@ -74,11 +72,10 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
           d: 0.72,
           h,
           kind: isCore && seed > 0.78 ? 'spire' : isCore ? 'tower' : 'mid',
-          hue: isCore ? (seed > 0.55 ? 'amber' : 'sky') : 'slate',
+          hue: isCore ? (seed > 0.5 ? 'cool' : 'warm') : 'stone',
         });
       }
     }
-    // Painter's sort back-to-front in isometric space (gx + gy ascending)
     buildings.sort((a, b) => a.gx + a.gy - (b.gx + b.gy));
 
     let trainT1 = 0;
@@ -103,16 +100,13 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
       if (ctx) {
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-        const bg = ctx.createRadialGradient(w * 0.68, h * 0.48, 60, w * 0.4, h * 0.5, w * 0.9);
-        bg.addColorStop(0, '#0F223D');
-        bg.addColorStop(0.55, '#081426');
-        bg.addColorStop(1, '#040914');
-        ctx.fillStyle = bg;
+        // Crisp daylight studio paper background
+        ctx.fillStyle = '#F4F6F9';
         ctx.fillRect(0, 0, w, h);
 
         const tileW = Math.max(28, Math.min(46, w * 0.032));
         const tileH = tileW * 0.5;
-        const originX = w * 0.68;
+        const originX = w * 0.69;
         const originY = h * 0.16;
 
         const iso = (gx: number, gy: number, z = 0) => ({
@@ -120,7 +114,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
           y: originY + (gx + gy) * tileH - z,
         });
 
-        // 1. Base City Ground & River Channel
+        // 1. Base City Ground & River Channel (Clean daylight cartographic palette)
         for (let gy = 0; gy < 18; gy++) {
           for (let gx = 0; gx < 18; gx++) {
             const p0 = iso(gx, gy);
@@ -139,33 +133,35 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
             ctx.closePath();
 
             if (isRiver) {
-              ctx.fillStyle = '#071B34';
+              ctx.fillStyle = '#CFE2F0';
               ctx.fill();
             } else if (isRoad) {
-              ctx.fillStyle = '#15253B';
+              ctx.fillStyle = '#FFFFFF';
               ctx.fill();
+              ctx.strokeStyle = 'rgba(148, 163, 184, 0.25)';
+              ctx.lineWidth = 0.6;
+              ctx.stroke();
             } else {
-              ctx.fillStyle = '#0D192B';
+              ctx.fillStyle = '#E8EDF3';
               ctx.fill();
-              ctx.strokeStyle = 'rgba(56, 189, 248, 0.06)';
-              ctx.lineWidth = 0.8;
+              ctx.strokeStyle = 'rgba(148, 163, 184, 0.22)';
+              ctx.lineWidth = 0.7;
               ctx.stroke();
             }
           }
         }
 
-        // 2. Glowing Cross-River Metro Viaducts (2 crossing lines)
+        // 2. Crisp Transit Viaducts & Articulated Trains (Zero neon glow)
         const drawIsoRail = (
           pts: [number, number, number][],
           color: string,
           tPos: number
         ) => {
           const screenPts = pts.map(([gx, gy, z]) => iso(gx, gy, z));
-          // Piers
           for (let i = 1; i < pts.length - 1; i++) {
             const top = screenPts[i];
             const bot = iso(pts[i][0], pts[i][1], 0);
-            ctx.strokeStyle = 'rgba(148, 163, 184, 0.25)';
+            ctx.strokeStyle = 'rgba(100, 116, 139, 0.35)';
             ctx.lineWidth = 2;
             ctx.beginPath();
             ctx.moveTo(top.x, top.y);
@@ -173,17 +169,20 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
             ctx.stroke();
           }
 
-          ctx.save();
-          ctx.shadowColor = color;
-          ctx.shadowBlur = 10;
-          ctx.strokeStyle = color;
-          ctx.lineWidth = 3;
+          ctx.strokeStyle = '#FFFFFF';
+          ctx.lineWidth = 5;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
           ctx.beginPath();
           screenPts.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
           ctx.stroke();
-          ctx.restore();
 
-          // Articulated 3-car train gliding along rail
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2.8;
+          ctx.beginPath();
+          screenPts.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+          ctx.stroke();
+
           for (let car = 0; car < 3; car++) {
             const ct = (tPos - car * 0.022 + 1) % 1;
             const totalSegs = screenPts.length - 1;
@@ -195,10 +194,13 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
             const tx = a.x + (b.x - a.x) * localT;
             const ty = a.y + (b.y - a.y) * localT;
 
-            ctx.fillStyle = car === 0 ? '#FFFFFF' : color;
+            ctx.fillStyle = car === 0 ? '#0F172A' : color;
+            ctx.strokeStyle = '#FFFFFF';
+            ctx.lineWidth = 1.2;
             ctx.beginPath();
-            ctx.arc(tx, ty, car === 0 ? 3.5 : 2.8, 0, Math.PI * 2);
+            ctx.arc(tx, ty, car === 0 ? 3.8 : 3.0, 0, Math.PI * 2);
             ctx.fill();
+            ctx.stroke();
           }
         };
 
@@ -209,11 +211,11 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
             [12, 8.5, 14],
             [18, 8.5, 10],
           ],
-          '#38BDF8',
+          '#2563EB',
           trainT1
         );
 
-        // 3. 3D Isometric Extruded Building Models
+        // 3. Daylight Architectural Massing Models
         for (const b of buildings) {
           const pad = (1 - b.w) / 2;
           const x0 = b.gx + pad;
@@ -230,9 +232,9 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
           const bBot2 = iso(x1, y1, 0);
           const bBot3 = iso(x0, y1, 0);
 
-          // Left-facing wall (x0..x1 at y1)
+          // Left-facing wall (sunlit ivory)
           ctx.fillStyle =
-            b.hue === 'amber' ? '#1E2D45' : b.hue === 'sky' ? '#172943' : '#121E33';
+            b.hue === 'cool' ? '#E4EAF2' : b.hue === 'warm' ? '#ECEEEF' : '#F2F4F7';
           ctx.beginPath();
           ctx.moveTo(bTop3.x, bTop3.y);
           ctx.lineTo(bTop2.x, bTop2.y);
@@ -241,9 +243,9 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
           ctx.closePath();
           ctx.fill();
 
-          // Right-facing wall (y0..y1 at x1)
+          // Right-facing wall (shaded architectural slate-gray)
           ctx.fillStyle =
-            b.hue === 'amber' ? '#142034' : b.hue === 'sky' ? '#101E33' : '#0C1626';
+            b.hue === 'cool' ? '#CBD5E1' : b.hue === 'warm' ? '#D6DCE5' : '#DDE3EB';
           ctx.beginPath();
           ctx.moveTo(bTop1.x, bTop1.y);
           ctx.lineTo(bTop2.x, bTop2.y);
@@ -252,9 +254,9 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
           ctx.closePath();
           ctx.fill();
 
-          // Roof face
+          // Roof face (crisp white)
           ctx.fillStyle =
-            b.hue === 'amber' ? '#2A4062' : b.hue === 'sky' ? '#243C5E' : '#1A2B45';
+            b.hue === 'cool' ? '#F8FAFC' : b.hue === 'warm' ? '#FFFFFF' : '#FAFBFD';
           ctx.beginPath();
           ctx.moveTo(bTop0.x, bTop0.y);
           ctx.lineTo(bTop1.x, bTop1.y);
@@ -263,46 +265,40 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
           ctx.closePath();
           ctx.fill();
 
-          ctx.strokeStyle = 'rgba(147, 197, 253, 0.16)';
+          ctx.strokeStyle = 'rgba(100, 116, 139, 0.28)';
           ctx.lineWidth = 0.7;
           ctx.stroke();
 
-          // Lit architectural window strips on tall towers
-          if (b.h > 32) {
-            ctx.fillStyle =
-              b.hue === 'amber' ? 'rgba(251, 191, 36, 0.45)' : 'rgba(56, 189, 248, 0.35)';
+          if (b.h > 34) {
             const floors = Math.floor(b.h / 11);
             for (let f = 1; f < floors; f++) {
               const wy = f * 10;
-              const pL = iso(x0 + 0.12, y1, wy);
-              const pR = iso(x1 - 0.12, y1, wy);
+              const pL = iso(x0 + 0.14, y1, wy);
+              const pR = iso(x1 - 0.14, y1, wy);
               ctx.beginPath();
               ctx.moveTo(pL.x, pL.y);
               ctx.lineTo(pR.x, pR.y);
-              ctx.strokeStyle =
-                b.hue === 'amber' ? 'rgba(251, 191, 36, 0.35)' : 'rgba(125, 211, 252, 0.28)';
-              ctx.lineWidth = 1.1;
+              ctx.strokeStyle = 'rgba(100, 116, 139, 0.22)';
+              ctx.lineWidth = 0.9;
               ctx.stroke();
             }
           }
 
-          // Spire beacon on landmark towers
           if (b.kind === 'spire') {
             const centerTop = iso((x0 + x1) / 2, (y0 + y1) / 2, b.h);
-            ctx.strokeStyle = 'rgba(186, 230, 253, 0.7)';
-            ctx.lineWidth = 1.4;
+            ctx.strokeStyle = '#64748B';
+            ctx.lineWidth = 1.2;
             ctx.beginPath();
             ctx.moveTo(centerTop.x, centerTop.y);
-            ctx.lineTo(centerTop.x, centerTop.y - 22);
+            ctx.lineTo(centerTop.x, centerTop.y - 20);
             ctx.stroke();
-            ctx.fillStyle = '#38BDF8';
+            ctx.fillStyle = '#E11D48';
             ctx.beginPath();
-            ctx.arc(centerTop.x, centerTop.y - 22, 2.2, 0, Math.PI * 2);
+            ctx.arc(centerTop.x, centerTop.y - 20, 2, 0, Math.PI * 2);
             ctx.fill();
           }
         }
 
-        // Second foreground rail corridor
         drawIsoRail(
           [
             [8.5, 0, 12],
@@ -310,7 +306,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
             [8.5, 12, 12],
             [8.5, 18, 12],
           ],
-          '#F43F5E',
+          '#E11D48',
           trainT2
         );
       }
@@ -323,129 +319,115 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   }, []);
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-[#040914] text-slate-100 select-none">
+    <div className="relative w-screen h-screen overflow-hidden bg-[#F4F6F9] text-slate-900 select-none">
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block" />
 
-      <div className="absolute inset-0 bg-gradient-to-r from-[#040914]/92 via-[#061020]/55 to-transparent pointer-events-none" />
+      <div className="absolute inset-0 bg-gradient-to-r from-[#F4F6F9] via-[#F4F6F9]/88 to-transparent pointer-events-none" />
 
-      {/* Top-Right Glass Icon Controls */}
-      <div className="absolute top-6 right-7 z-20 flex items-center gap-2.5">
+      {/* Top-Right Minimal Icon Controls */}
+      <div className="absolute top-6 right-7 z-20 flex items-center gap-2">
         <button
           onClick={onOpenGdd}
           title="系統架構設計文件"
-          className="w-10 h-10 rounded-full bg-slate-900/65 backdrop-blur-xl border border-white/10 hover:border-sky-400/50 hover:bg-slate-800/80 flex items-center justify-center text-slate-300 hover:text-white transition-all"
+          className="w-10 h-10 rounded-lg bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 shadow-xs flex items-center justify-center text-slate-600 hover:text-slate-900 transition-colors cursor-pointer"
         >
           <FileText className="w-4 h-4" />
         </button>
         <button
           onClick={onToggleMute}
           title={muted ? '開啟音效' : '靜音'}
-          className="w-10 h-10 rounded-full bg-slate-900/65 backdrop-blur-xl border border-white/10 hover:border-sky-400/50 hover:bg-slate-800/80 flex items-center justify-center text-slate-300 hover:text-white transition-all"
+          className="w-10 h-10 rounded-lg bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 shadow-xs flex items-center justify-center text-slate-600 hover:text-slate-900 transition-colors cursor-pointer"
         >
           {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
         </button>
       </div>
 
-      {/* Left-Aligned Architectural Hero & Menu Stack */}
-      <div className="relative z-10 h-full flex flex-col justify-between px-10 md:px-16 py-10 max-w-xl">
-        <div className="pt-4 space-y-6">
-          <div>
-            <h1 className="text-5xl md:text-[56px] font-bold tracking-tight text-[#93C5FD] leading-tight">
+      {/* Left-Aligned Daylight Studio Hero & Clean Menu */}
+      <div className="relative z-10 h-full flex flex-col justify-between px-10 md:px-16 py-12 max-w-xl">
+        <div className="pt-6 space-y-8">
+          <div className="space-y-2.5">
+            <div className="text-xs font-medium text-slate-500 tracking-wide">
+              上海都市軌道交通模擬系統
+            </div>
+            <h1 className="text-5xl md:text-[54px] font-bold tracking-tight text-slate-950 leading-none">
               地鐵構築者
             </h1>
-            <p className="text-sm text-slate-400 mt-2 tracking-wide">
-              MetroForge · 高自由度軌道工程與動態都市模擬
+            <p className="text-sm text-slate-600 max-w-sm leading-relaxed">
+              MetroForge · 無網格自由線路設計、跨江地下分層工程與動態通勤人流模擬
             </p>
           </div>
 
-          <div className="flex items-center gap-0 py-2 w-80" aria-hidden="true">
-            <div className="h-[2px] w-7 bg-sky-400/50" />
-            <div className="w-2.5 h-2.5 rounded-full border-2 border-sky-300 bg-[#07111E]" />
-            <div className="h-[2px] w-8 bg-sky-400/50" />
-            <div className="w-2.5 h-2.5 rounded-full border-2 border-sky-300 bg-[#07111E]" />
-            <div className="h-[2px] w-3 bg-sky-400/50" />
-            <div className="flex items-end gap-1 px-1.5">
-              <span className="w-1.5 h-4 bg-sky-300/80 rounded-t-xs" />
-              <span className="w-1.5 h-6 bg-sky-200 rounded-t-xs" />
-              <span className="w-1.5 h-8 bg-sky-100 rounded-t-xs" />
-              <span className="w-1.5 h-5 bg-sky-200 rounded-t-xs" />
-              <span className="w-1.5 h-3.5 bg-sky-300/80 rounded-t-xs" />
-            </div>
-            <div className="h-[2px] w-3 bg-sky-400/50" />
-            <div className="w-2.5 h-2.5 rounded-full border-2 border-sky-300 bg-[#07111E]" />
-            <div className="h-[2px] w-8 bg-sky-400/50" />
-            <div className="w-2.5 h-2.5 rounded-full border-2 border-sky-300 bg-[#07111E]" />
-            <div className="h-[2px] flex-1 bg-sky-400/50" />
-          </div>
-
-          <div className="space-y-3 w-full max-w-[390px]">
+          <div className="space-y-2.5 w-full max-w-[360px]">
             <button
               onClick={onStartNewGame}
-              className="w-full px-5 py-4 rounded-xl bg-gradient-to-r from-[#5EA0DF]/90 to-[#3B76B8]/80 hover:from-[#6FB0ED] hover:to-[#4785CA] border border-sky-300/30 shadow-xl shadow-sky-950/50 flex items-center justify-between text-white transition-all group cursor-pointer"
+              className="w-full px-5 py-3.5 rounded-lg bg-slate-950 hover:bg-slate-800 text-white shadow-sm flex items-center justify-between transition-colors group cursor-pointer"
             >
-              <span className="flex items-center gap-3.5 text-base font-semibold">
-                <Play className="w-4 h-4 fill-white" />
+              <span className="flex items-center gap-3 text-sm font-semibold">
+                <Play className="w-4 h-4 fill-current" />
                 <span>開始遊戲</span>
               </span>
-              <span className="flex items-center gap-1.5 text-xs text-sky-100/90 group-hover:translate-x-0.5 transition-transform">
-                <span>選擇地圖與難度</span>
+              <span className="flex items-center gap-1.5 text-xs text-slate-300 group-hover:translate-x-0.5 transition-transform">
+                <span>選擇難度與開局</span>
                 <ChevronRight className="w-4 h-4" />
               </span>
             </button>
 
-            <button
-              onClick={onContinueGame}
-              className="w-full px-5 py-3.5 rounded-xl bg-slate-900/60 hover:bg-slate-800/75 backdrop-blur-xl border border-white/10 hover:border-white/20 flex items-center justify-between text-slate-100 transition-all group cursor-pointer"
-            >
-              <span className="flex items-center gap-3.5 text-sm font-medium">
-                <Clock className="w-4 h-4 text-slate-300" />
-                <span>進入目前都市</span>
-              </span>
-              <span className="flex items-center gap-1.5 text-xs text-slate-400 group-hover:text-slate-200 transition-colors">
-                <span>{currentCityLabel}</span>
-                <ChevronRight className="w-4 h-4" />
-              </span>
-            </button>
+            <div className="bg-white border border-slate-200 rounded-lg divide-y divide-slate-200 shadow-[0_2px_10px_rgba(15,23,42,0.04)] overflow-hidden">
+              <button
+                onClick={onContinueGame}
+                className="w-full px-4 py-3 hover:bg-slate-50 flex items-center justify-between text-slate-800 transition-colors group cursor-pointer"
+              >
+                <span className="flex items-center gap-3 text-sm font-medium">
+                  <Clock className="w-4 h-4 text-slate-500" />
+                  <span>進入目前都市</span>
+                </span>
+                <span className="flex items-center gap-1 text-xs text-slate-500 group-hover:text-slate-900">
+                  <span>{currentCityLabel}</span>
+                  <ChevronRight className="w-4 h-4" />
+                </span>
+              </button>
 
-            <button
-              onClick={onStartNewGame}
-              className="w-full px-5 py-3.5 rounded-xl bg-slate-900/60 hover:bg-slate-800/75 backdrop-blur-xl border border-white/10 hover:border-white/20 flex items-center justify-between text-slate-100 transition-all group cursor-pointer"
-            >
-              <span className="flex items-center gap-3.5 text-sm font-medium">
-                <Settings className="w-4 h-4 text-slate-300" />
-                <span>開局設定與財政難度</span>
-              </span>
-              <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-slate-200 transition-colors" />
-            </button>
+              <button
+                onClick={onStartNewGame}
+                className="w-full px-4 py-3 hover:bg-slate-50 flex items-center justify-between text-slate-800 transition-colors group cursor-pointer"
+              >
+                <span className="flex items-center gap-3 text-sm font-medium">
+                  <SlidersHorizontal className="w-4 h-4 text-slate-500" />
+                  <span>開局設定與財政難度</span>
+                </span>
+                <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-slate-900" />
+              </button>
 
-            <button
-              onClick={onOpenGdd}
-              className="w-full px-5 py-3.5 rounded-xl bg-slate-900/60 hover:bg-slate-800/75 backdrop-blur-xl border border-white/10 hover:border-white/20 flex items-center justify-between text-slate-100 transition-all group cursor-pointer"
-            >
-              <span className="flex items-center gap-3.5 text-sm font-medium">
-                <FileText className="w-4 h-4 text-slate-300" />
-                <span>系統架構設計文件 (GDD)</span>
-              </span>
-              <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-slate-200 transition-colors" />
-            </button>
+              <button
+                onClick={onOpenGdd}
+                className="w-full px-4 py-3 hover:bg-slate-50 flex items-center justify-between text-slate-800 transition-colors group cursor-pointer"
+              >
+                <span className="flex items-center gap-3 text-sm font-medium">
+                  <FileText className="w-4 h-4 text-slate-500" />
+                  <span>系統設計說明 (GDD)</span>
+                </span>
+                <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-slate-900" />
+              </button>
+            </div>
 
             <button
               onClick={onQuickDemo}
-              className="w-full px-5 py-3 rounded-xl bg-slate-900/35 hover:bg-slate-800/55 backdrop-blur-md border border-dashed border-slate-700/80 hover:border-sky-500/40 flex items-center justify-between text-slate-300 transition-all group cursor-pointer mt-2"
+              className="w-full px-4 py-2.5 rounded-lg border border-slate-300/90 bg-white/75 hover:bg-white hover:border-blue-600/40 flex items-center justify-between text-slate-700 transition-colors group cursor-pointer"
             >
-              <span className="flex items-center gap-2.5 text-xs">
-                <HelpCircle className="w-4 h-4 text-slate-400" />
-                <span>第一次玩？</span>
-                <span className="text-emerald-400 font-medium">載入示範路網 · 立即觀察列車</span>
+              <span className="flex items-center gap-2 text-xs">
+                <Compass className="w-3.5 h-3.5 text-blue-600" />
+                <span>載入多線示範路網</span>
+                <span className="text-slate-400">·</span>
+                <span className="text-blue-700 font-medium">立即觀察列車運行</span>
               </span>
-              <ChevronRight className="w-4 h-4 text-slate-500 group-hover:text-slate-300" />
+              <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-slate-800" />
             </button>
           </div>
         </div>
 
         <div className="space-y-1 text-xs text-slate-500">
-          <p className="text-slate-400">原創程序化建築模型 · 向量河道地圖 · 無網格自由軌道</p>
-          <p>支援 B1–B5 深層立體分層、快慢車與貫通運轉即時模擬</p>
+          <p className="text-slate-600 font-medium">上海 16 區真實地理邊界 · 黃浦江／蘇州河／三島水陸實景</p>
+          <p>支援 EL 高架與 B1–B5 深層軌道立體分層、快慢車及貫通運轉模擬</p>
         </div>
       </div>
     </div>

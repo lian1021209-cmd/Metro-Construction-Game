@@ -75,7 +75,6 @@ export const MetroCircleModal: React.FC<MetroCircleModalProps> = ({
     const liveLines = lines.filter((l) => !l.isDraft && l.stationIds.length >= 2);
     const list: CitizenPost[] = [];
 
-    // Find highest-population uncovered cell for reactive complaint!
     let bestUncovered = { x: map.width * 0.5, y: map.height * 0.35, pop: 0 };
     for (const c of map.cells) {
       if (!c.coveredByMetro && c.population + c.jobs > bestUncovered.pop) {
@@ -113,7 +112,7 @@ export const MetroCircleModal: React.FC<MetroCircleModalProps> = ({
         id: 'post_line_praise',
         author: lang === 'en' ? 'Daily Rider' : '通勤族',
         handle: '@commuter_7276 · 2d',
-        badgeColor: '#10B981',
+        badgeColor: '#059669',
         badgeChar: '通',
         category: 'praise',
         tag: `#${topLine.name.split(' ')[0]}`,
@@ -135,7 +134,7 @@ export const MetroCircleModal: React.FC<MetroCircleModalProps> = ({
         id: 'post_crowded_st',
         author: lang === 'en' ? 'Station Watcher' : '換乘觀察員',
         handle: '@transit_fan_1614 · 6h',
-        badgeColor: '#F59E0B',
+        badgeColor: '#D97706',
         badgeChar: '站',
         category: busyStation.congestionLoad > 0.75 ? 'complaint' : 'suggestion',
         tag: lang === 'en' ? '#Transfer' : '#換乘',
@@ -159,7 +158,7 @@ export const MetroCircleModal: React.FC<MetroCircleModalProps> = ({
       id: 'post_suggestion_tod',
       author: lang === 'en' ? 'Urban Planner' : '軌道規劃迷',
       handle: '@tod_planner · 1d',
-      badgeColor: '#0EA5E9',
+      badgeColor: '#2563EB',
       badgeChar: '規',
       category: 'suggestion',
       tag: lang === 'en' ? '#NewStation' : '#新站',
@@ -197,15 +196,13 @@ export const MetroCircleModal: React.FC<MetroCircleModalProps> = ({
   });
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center p-4">
-      <div className="w-full max-w-6xl h-[86vh] bg-[#0B1320]/96 border border-white/12 rounded-2xl shadow-2xl flex overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-slate-900/30 backdrop-blur-[2px] flex items-center justify-center p-4">
+      <div className="w-full max-w-6xl h-[86vh] bg-white border border-slate-200 rounded-xl shadow-xl flex overflow-hidden text-slate-900">
         {/* Left Nav */}
-        <aside className="w-48 shrink-0 bg-[#080F1A] border-r border-white/10 p-4 flex flex-col justify-between">
+        <aside className="w-48 shrink-0 bg-slate-50 border-r border-slate-200 p-4 flex flex-col justify-between">
           <div className="space-y-6">
-            <div className="flex items-center gap-2.5 text-base font-bold text-slate-100">
-              <div className="w-7 h-7 rounded-lg bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-amber-300">
-                <TrainFront className="w-4 h-4" />
-              </div>
+            <div className="flex items-center gap-2 text-base font-bold text-slate-900">
+              <TrainFront className="w-4 h-4 text-blue-600 shrink-0" />
               <span>{t(lang, 'metroCircleTitle')}</span>
             </div>
 
@@ -220,8 +217,10 @@ export const MetroCircleModal: React.FC<MetroCircleModalProps> = ({
                 <button
                   key={item.id}
                   onClick={() => setNav(item.id)}
-                  className={`w-full px-3 py-2.5 rounded-xl flex items-center gap-2.5 font-medium transition-colors ${
-                    nav === item.id ? 'bg-white/12 text-white' : 'text-slate-400 hover:text-slate-200'
+                  className={`w-full px-3 py-2.5 rounded-lg flex items-center gap-2.5 font-semibold transition-colors ${
+                    nav === item.id
+                      ? 'bg-slate-900 text-white'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/70'
                   }`}
                 >
                   {item.icon}
@@ -233,23 +232,23 @@ export const MetroCircleModal: React.FC<MetroCircleModalProps> = ({
 
           <button
             onClick={onClose}
-            className="w-full py-2.5 px-3 rounded-xl bg-white/8 hover:bg-white/15 border border-white/10 text-xs font-medium text-slate-200"
+            className="w-full py-2 px-3 rounded-lg bg-white hover:bg-slate-100 border border-slate-300 text-xs font-medium text-slate-800 transition-colors"
           >
             {t(lang, 'backToCity')}
           </button>
         </aside>
 
         {/* Center Feed */}
-        <section className="flex-1 flex flex-col border-r border-white/10 overflow-hidden">
-          <div className="px-6 py-4 border-b border-white/10 space-y-3">
+        <section className="flex-1 flex flex-col border-r border-slate-200 overflow-hidden bg-white">
+          <div className="px-6 py-4 border-b border-slate-200 space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-baseline gap-2.5">
-                <h2 className="text-base font-bold text-slate-100">{t(lang, 'mcFeedHome')}</h2>
-                <span className="text-xs text-slate-400">
+                <h2 className="text-base font-bold text-slate-900">{t(lang, 'mcFeedHome')}</h2>
+                <span className="text-xs text-slate-500 font-mono-tabular">
                   {map.name} · {year}/{month}
                 </span>
               </div>
-              <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-white rounded-lg lg:hidden">
+              <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-slate-900 rounded-lg lg:hidden">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -266,10 +265,10 @@ export const MetroCircleModal: React.FC<MetroCircleModalProps> = ({
                 <button
                   key={tb.id}
                   onClick={() => setCatTab(tb.id)}
-                  className={`py-2 text-center font-medium border-b-2 transition-colors ${
+                  className={`py-2 text-center font-semibold border-b-2 transition-colors ${
                     catTab === tb.id
-                      ? 'border-sky-400 text-white'
-                      : 'border-transparent text-slate-400 hover:text-slate-200'
+                      ? 'border-blue-600 text-slate-900'
+                      : 'border-transparent text-slate-500 hover:text-slate-900'
                   }`}
                 >
                   {tb.label}
@@ -278,20 +277,20 @@ export const MetroCircleModal: React.FC<MetroCircleModalProps> = ({
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto divide-y divide-white/8">
+          <div className="flex-1 overflow-y-auto divide-y divide-slate-200">
             {/* Official Monthly Poll */}
             {nav !== 'following' && (
-              <div className="p-5 space-y-3 bg-sky-950/15">
+              <div className="p-5 space-y-3 bg-blue-50/40">
                 <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-full bg-sky-500/20 border border-sky-400/40 flex items-center justify-center text-sky-300">
+                  <div className="w-9 h-9 rounded-lg bg-slate-900 flex items-center justify-center text-white shrink-0">
                     <TrainFront className="w-4 h-4" />
                   </div>
                   <div>
-                    <div className="text-xs font-semibold text-slate-100">
+                    <div className="text-xs font-semibold text-slate-900">
                       {lang === 'en' ? 'Metro Official' : '都市地鐵官方'} ·{' '}
-                      <span className="text-slate-400 font-normal">@metro_official</span>
+                      <span className="text-slate-500 font-normal">@metro_official</span>
                     </div>
-                    <div className="text-xs text-slate-300 mt-0.5">
+                    <div className="text-xs text-slate-700 mt-0.5">
                       {lang === 'en'
                         ? `How satisfied are you with this month's service? Current rating: ${stats.satisfaction}/100.`
                         : `你對本月的地鐵服務滿意嗎？本月乘客滿意度 ${stats.satisfaction} 分，感謝每一位乘客的反饋！`}
@@ -301,17 +300,17 @@ export const MetroCircleModal: React.FC<MetroCircleModalProps> = ({
 
                 <div className="space-y-1.5 text-xs font-mono-tabular pl-12">
                   {[
-                    { label: lang === 'en' ? 'Satisfied' : '滿意', pct: satisfiedPct, cls: 'bg-sky-500/30' },
-                    { label: lang === 'en' ? 'Neutral' : '一般', pct: neutralPct, cls: 'bg-sky-500/20' },
-                    { label: lang === 'en' ? 'Unsatisfied' : '不滿意', pct: unhappyPct, cls: 'bg-white/10' },
+                    { label: lang === 'en' ? 'Satisfied' : '滿意', pct: satisfiedPct, cls: 'bg-blue-100' },
+                    { label: lang === 'en' ? 'Neutral' : '一般', pct: neutralPct, cls: 'bg-slate-200/80' },
+                    { label: lang === 'en' ? 'Unsatisfied' : '不滿意', pct: unhappyPct, cls: 'bg-slate-100' },
                   ].map((row) => (
                     <div
                       key={row.label}
-                      className="relative h-8 rounded-lg bg-slate-950/60 border border-white/8 overflow-hidden flex items-center justify-between px-3"
+                      className="relative h-8 rounded-lg bg-white border border-slate-200 overflow-hidden flex items-center justify-between px-3"
                     >
                       <div className={`absolute inset-y-0 left-0 ${row.cls}`} style={{ width: `${row.pct}%` }} />
-                      <span className="relative z-10 text-slate-200 font-sans">{row.label}</span>
-                      <span className="relative z-10 text-slate-200">{row.pct}%</span>
+                      <span className="relative z-10 text-slate-800 font-sans font-medium">{row.label}</span>
+                      <span className="relative z-10 text-slate-900 font-semibold">{row.pct}%</span>
                     </div>
                   ))}
                 </div>
@@ -322,9 +321,9 @@ export const MetroCircleModal: React.FC<MetroCircleModalProps> = ({
             {visiblePosts.map((post) => {
               const liked = likedIds.has(post.id);
               return (
-                <div key={post.id} className="p-5 flex gap-3.5 hover:bg-white/[0.02] transition-colors">
+                <div key={post.id} className="p-5 flex gap-3.5 hover:bg-slate-50/70 transition-colors">
                   <div
-                    className="w-9 h-9 rounded-full shrink-0 flex items-center justify-center text-white text-xs font-bold"
+                    className="w-9 h-9 rounded-lg shrink-0 flex items-center justify-center text-white text-xs font-bold"
                     style={{ backgroundColor: post.badgeColor }}
                   >
                     {post.badgeChar}
@@ -332,23 +331,23 @@ export const MetroCircleModal: React.FC<MetroCircleModalProps> = ({
                   <div className="flex-1 space-y-2">
                     <div className="flex items-center justify-between">
                       <div className="text-xs">
-                        <span className="font-semibold text-slate-100">{post.author}</span>{' '}
-                        <span className="text-slate-400">{post.handle}</span>
+                        <span className="font-semibold text-slate-900">{post.author}</span>{' '}
+                        <span className="text-slate-500">{post.handle}</span>
                       </div>
                       <span
-                        className={`text-[11px] font-medium ${
+                        className={`text-[11px] font-semibold ${
                           post.category === 'complaint'
-                            ? 'text-rose-300'
+                            ? 'text-rose-600'
                             : post.category === 'praise'
-                            ? 'text-emerald-300'
-                            : 'text-sky-300'
+                            ? 'text-emerald-700'
+                            : 'text-blue-700'
                         }`}
                       >
                         {post.tag}
                       </span>
                     </div>
-                    <p className="text-xs text-slate-200 leading-relaxed">{post.body}</p>
-                    <div className="flex items-center justify-between pt-1 text-[11px] text-slate-400 font-mono-tabular">
+                    <p className="text-xs text-slate-700 leading-relaxed">{post.body}</p>
+                    <div className="flex items-center justify-between pt-1 text-[11px] text-slate-500 font-mono-tabular">
                       <div className="flex items-center gap-5">
                         <span className="flex items-center gap-1">
                           <MessageCircle className="w-3.5 h-3.5" />
@@ -367,8 +366,8 @@ export const MetroCircleModal: React.FC<MetroCircleModalProps> = ({
                               return next;
                             })
                           }
-                          className={`flex items-center gap-1 ${
-                            liked ? 'text-rose-400' : 'hover:text-rose-300'
+                          className={`flex items-center gap-1 transition-colors ${
+                            liked ? 'text-rose-600 font-semibold' : 'hover:text-rose-600'
                           }`}
                         >
                           <Heart className={`w-3.5 h-3.5 ${liked ? 'fill-current' : ''}`} />
@@ -387,9 +386,9 @@ export const MetroCircleModal: React.FC<MetroCircleModalProps> = ({
                               onLocateWorld(post.targetXY!.x, post.targetXY!.y);
                               onClose();
                             }}
-                            className="px-2.5 py-1 rounded-lg bg-white/8 hover:bg-white/15 border border-white/10 text-slate-200 flex items-center gap-1"
+                            className="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-800 font-medium flex items-center gap-1 transition-colors"
                           >
-                            <MapPin className="w-3 h-3 text-sky-400" />
+                            <MapPin className="w-3 h-3 text-blue-600" />
                             <span>{t(lang, 'locateBtn')}</span>
                           </button>
                         )}
@@ -399,9 +398,9 @@ export const MetroCircleModal: React.FC<MetroCircleModalProps> = ({
                               onClose();
                               onInspectLine(post.targetLineId!);
                             }}
-                            className="px-2.5 py-1 rounded-lg bg-white/8 hover:bg-white/15 border border-white/10 text-slate-200 flex items-center gap-1"
+                            className="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-800 font-medium flex items-center gap-1 transition-colors"
                           >
-                            <TrainFront className="w-3 h-3 text-emerald-400" />
+                            <TrainFront className="w-3 h-3 text-emerald-600" />
                             <span>{t(lang, 'viewLineBtn')}</span>
                           </button>
                         )}
@@ -415,7 +414,7 @@ export const MetroCircleModal: React.FC<MetroCircleModalProps> = ({
         </section>
 
         {/* Right Sidebar: Satisfaction + Trending Topics */}
-        <aside className="hidden lg:flex w-72 shrink-0 flex-col p-4 space-y-4 bg-[#09111E]">
+        <aside className="hidden lg:flex w-72 shrink-0 flex-col p-4 space-y-4 bg-slate-50">
           <div className="flex items-center justify-between gap-2">
             <div className="relative flex-1">
               <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -424,29 +423,30 @@ export const MetroCircleModal: React.FC<MetroCircleModalProps> = ({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder={lang === 'en' ? 'Search #topics...' : '搜尋動態或 #話題'}
-                className="w-full pl-8 pr-3 py-2 text-xs rounded-xl bg-slate-950/70 border border-white/10 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-sky-400"
+                className="w-full pl-8 pr-3 py-2 text-xs rounded-lg bg-white border border-slate-300 text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-blue-600"
               />
             </div>
-            <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-white rounded-lg">
+            <button
+              onClick={onClose}
+              className="p-1.5 text-slate-400 hover:text-slate-900 rounded-lg hover:bg-slate-200/70 transition-colors"
+            >
               <X className="w-4 h-4" />
             </button>
           </div>
 
-          <div className="p-4 rounded-2xl bg-slate-950/60 border border-white/8 space-y-2">
-            <div className="text-xs text-slate-400">{t(lang, 'residentSatisfaction')}</div>
+          <div className="p-4 rounded-xl bg-white border border-slate-200 space-y-2">
+            <div className="text-xs text-slate-500 font-medium">{t(lang, 'residentSatisfaction')}</div>
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-full bg-emerald-500/20 border border-emerald-400/40 flex items-center justify-center text-emerald-400">
-                <Smile className="w-4 h-4" />
-              </div>
-              <div className="text-2xl font-bold font-mono-tabular text-slate-100">
+              <Smile className="w-6 h-6 text-emerald-600 shrink-0" />
+              <div className="text-2xl font-bold font-mono-tabular text-slate-900">
                 {stats.satisfaction} <span className="text-xs text-slate-400 font-normal">/ 100</span>
               </div>
             </div>
           </div>
 
-          <div className="p-4 rounded-2xl bg-slate-950/60 border border-white/8 space-y-3 flex-1">
-            <div className="text-sm font-semibold text-slate-100">{t(lang, 'trendingTopics')}</div>
-            <div className="space-y-3 text-xs">
+          <div className="p-4 rounded-xl bg-white border border-slate-200 space-y-3 flex-1">
+            <div className="text-sm font-semibold text-slate-900">{t(lang, 'trendingTopics')}</div>
+            <div className="space-y-1.5 text-xs">
               {[
                 { rank: 1, tag: lang === 'en' ? '#Coverage' : '#覆蓋', meta: '3 · 1,326' },
                 { rank: 2, tag: lang === 'en' ? '#NewStation' : '#新站', meta: '3 · 998' },
@@ -457,10 +457,10 @@ export const MetroCircleModal: React.FC<MetroCircleModalProps> = ({
                 <button
                   key={item.rank}
                   onClick={() => setQuery(item.tag.replace('#', ''))}
-                  className="w-full text-left hover:bg-white/5 p-1.5 rounded-lg transition-colors"
+                  className="w-full text-left hover:bg-slate-50 p-2 rounded-lg transition-colors"
                 >
                   <div className="text-[10px] text-slate-400">{item.rank}. {lang === 'en' ? 'Trending' : '地鐵熱議'}</div>
-                  <div className="font-semibold text-slate-100 mt-0.5">{item.tag}</div>
+                  <div className="font-semibold text-slate-900 mt-0.5">{item.tag}</div>
                   <div className="text-[10px] text-slate-500 font-mono-tabular">{item.meta}</div>
                 </button>
               ))}

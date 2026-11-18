@@ -1,7 +1,7 @@
 import type { StyleSpecification } from 'maplibre-gl';
 import { BuildingModel, CityMap, CityPoi, RiverPath, RoadSegment } from '../types/game';
 
-export type OpenMapStyleId = 'esri_dark_gray' | 'canvas_vector';
+export type OpenMapStyleId = 'esri_light_gray' | 'canvas_vector' | 'esri_dark_gray';
 
 export function lonToNormX(lon: number): number {
   return (lon + 180) / 360;
@@ -98,6 +98,44 @@ export function haversineKm(lat1: number, lon1: number, lat2: number, lon2: numb
 }
 
 /**
+ * Free, API-keyless Esri World Light Gray Base Raster Style for MapLibre GL
+ */
+export function getEsriLightGrayStyle(): StyleSpecification {
+  return {
+    version: 8,
+    sources: {
+      esri_light_gray: {
+        type: 'raster',
+        tiles: [
+          'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+        ],
+        tileSize: 256,
+        maxzoom: 16,
+        attribution: 'Tiles © Esri — Esri, DeLorme, NAVTEQ',
+      },
+    },
+    layers: [
+      {
+        id: 'esri-light-gray-bg',
+        type: 'background',
+        paint: {
+          'background-color': '#EEF1F4',
+        },
+      },
+      {
+        id: 'esri-light-gray-base',
+        type: 'raster',
+        source: 'esri_light_gray',
+        paint: {
+          'raster-contrast': 0.06,
+          'raster-saturation': -0.05,
+        },
+      },
+    ],
+  };
+}
+
+/**
  * Free, API-keyless Esri World Dark Gray Base Raster Style for MapLibre GL
  */
 export function getEsriDarkGrayStyle(): StyleSpecification {
@@ -137,7 +175,7 @@ export function getEsriDarkGrayStyle(): StyleSpecification {
 }
 
 /**
- * Pure GeoJSON vector river & dark background fallback style (zero external tile dependencies)
+ * Pure GeoJSON vector river & crisp light cartographic background fallback style (zero external tile dependencies)
  */
 export function getPureCanvasGeoStyle(): StyleSpecification {
   return {
@@ -145,10 +183,10 @@ export function getPureCanvasGeoStyle(): StyleSpecification {
     sources: {},
     layers: [
       {
-        id: 'pure-dark-bg',
+        id: 'pure-light-bg',
         type: 'background',
         paint: {
-          'background-color': '#091322',
+          'background-color': '#F2F4F7',
         },
       },
     ],

@@ -30,6 +30,7 @@ import {
   buildCityRiversGeoJson,
   GeoBounds,
   getEsriDarkGrayStyle,
+  getEsriLightGrayStyle,
   getPureCanvasGeoStyle,
   haversineKm,
   latLonToWorld,
@@ -181,17 +182,17 @@ function traceVariableRiverPolygon(ctx: CanvasRenderingContext2D, rv: RiverPath,
 }
 
 /**
- * Cartographic vector canvas fallback — Esri World Dark Gray Base cartographic parity
+ * Cartographic vector canvas fallback — clean daylight architectural atlas or dark gray parity
  */
-function buildBaseMapCanvas(map: CityMap): HTMLCanvasElement {
+function buildBaseMapCanvas(map: CityMap, isDark = false): HTMLCanvasElement {
   const off = document.createElement('canvas');
   off.width = map.width;
   off.height = map.height;
   const ctx = off.getContext('2d');
   if (!ctx) return off;
 
-  // 1. Matte dark charcoal-gray cartographic land matching Esri World Dark Gray Base
-  ctx.fillStyle = '#2B2F35';
+  // 1. Matte land base
+  ctx.fillStyle = isDark ? '#2B2F35' : '#F3F5F8';
   ctx.fillRect(0, 0, map.width, map.height);
 
   // 2. Subtle organic urban fabric & park greenbelts
@@ -206,12 +207,14 @@ function buildBaseMapCanvas(map: CityMap): HTMLCanvasElement {
     const cy = (cell.gy + 0.5) * cs;
     const density = cell.population + cell.jobs;
     if (cell.zone === 'park') {
-      ctx.fillStyle = '#26312E';
+      ctx.fillStyle = isDark ? '#26312E' : '#E3EFE7';
       ctx.beginPath();
       ctx.arc(cx, cy, cs * 0.78, 0, Math.PI * 2);
       ctx.fill();
     } else if (density > 65 || cell.zone !== 'none') {
-      ctx.fillStyle = density > 480 ? '#363A41' : '#31353C';
+      ctx.fillStyle = isDark
+        ? density > 480 ? '#363A41' : '#31353C'
+        : density > 480 ? '#E8ECEF' : '#EDEFF3';
       ctx.beginPath();
       ctx.arc(cx, cy, cs * 0.75, 0, Math.PI * 2);
       ctx.fill();
@@ -227,9 +230,11 @@ function buildBaseMapCanvas(map: CityMap): HTMLCanvasElement {
       ctx.rotate(hill.rotation);
       ctx.beginPath();
       ctx.ellipse(0, 0, hill.rx * scale, hill.ry * scale, 0, 0, Math.PI * 2);
-      ctx.fillStyle = ring === 0 ? '#272B30' : ring === 1 ? '#24282D' : '#21252A';
+      ctx.fillStyle = isDark
+        ? ring === 0 ? '#272B30' : ring === 1 ? '#24282D' : '#21252A'
+        : ring === 0 ? '#E9EDF2' : ring === 1 ? '#E3E8EE' : '#DDE3EA';
       ctx.fill();
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.045)';
+      ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.045)' : 'rgba(15, 23, 42, 0.06)';
       ctx.lineWidth = 1;
       ctx.stroke();
       ctx.restore();
@@ -271,14 +276,14 @@ function buildBaseMapCanvas(map: CityMap): HTMLCanvasElement {
       for (let i = 0; i < data.length; i += 4) {
         const a = data[i + 3];
         if (a >= 126) {
-          data[i] = 22;
-          data[i + 1] = 25;
-          data[i + 2] = 29;
+          data[i] = isDark ? 22 : 200;
+          data[i + 1] = isDark ? 25 : 222;
+          data[i + 2] = isDark ? 29 : 238;
           data[i + 3] = 255;
         } else if (a >= 88) {
-          data[i] = 33;
-          data[i + 1] = 37;
-          data[i + 2] = 43;
+          data[i] = isDark ? 33 : 182;
+          data[i + 1] = isDark ? 37 : 209;
+          data[i + 2] = isDark ? 43 : 228;
           data[i + 3] = 255;
         } else {
           data[i + 3] = 0;
@@ -299,20 +304,20 @@ function buildBaseMapCanvas(map: CityMap): HTMLCanvasElement {
 
   for (const rv of map.rivers) {
     traceVariableRiverPolygon(ctx, rv, 6);
-    ctx.fillStyle = '#22262C';
+    ctx.fillStyle = isDark ? '#22262C' : '#B7D3E6';
     ctx.fill();
     drawSmoothRiver(ctx, rv.points);
-    ctx.strokeStyle = '#22262C';
+    ctx.strokeStyle = isDark ? '#22262C' : '#B7D3E6';
     ctx.lineWidth = rv.width + 6;
     ctx.stroke();
   }
 
   for (const rv of map.rivers) {
     traceVariableRiverPolygon(ctx, rv, 0);
-    ctx.fillStyle = '#16191D';
+    ctx.fillStyle = isDark ? '#16191D' : '#CBE0F0';
     ctx.fill();
     drawSmoothRiver(ctx, rv.points);
-    ctx.strokeStyle = '#16191D';
+    ctx.strokeStyle = isDark ? '#16191D' : '#CBE0F0';
     ctx.lineWidth = rv.width;
     ctx.stroke();
   }
@@ -329,7 +334,7 @@ function buildBaseMapCanvas(map: CityMap): HTMLCanvasElement {
       ctx.translate(mid.x, mid.y);
       ctx.rotate(ang);
       ctx.font = '500 12px "Noto Sans TC", sans-serif';
-      ctx.fillStyle = 'rgba(148, 163, 184, 0.36)';
+      ctx.fillStyle = isDark ? 'rgba(148, 163, 184, 0.36)' : 'rgba(51, 65, 85, 0.48)';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(rv.name, 0, 0);
@@ -338,7 +343,7 @@ function buildBaseMapCanvas(map: CityMap): HTMLCanvasElement {
   }
   ctx.restore();
 
-  // 6. Multi-tier Esri-style curved street hierarchy (local -> secondary -> arterial -> expressways)
+  // 6. Multi-tier curved street hierarchy (local -> secondary -> arterial -> expressways)
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
@@ -352,7 +357,7 @@ function buildBaseMapCanvas(map: CityMap): HTMLCanvasElement {
         ];
 
   // Local capillary streets
-  ctx.strokeStyle = 'rgba(78, 84, 93, 0.56)';
+  ctx.strokeStyle = isDark ? 'rgba(78, 84, 93, 0.56)' : 'rgba(203, 213, 225, 0.72)';
   ctx.lineWidth = 1.0;
   ctx.beginPath();
   for (const road of map.roads) {
@@ -363,7 +368,7 @@ function buildBaseMapCanvas(map: CityMap): HTMLCanvasElement {
   ctx.stroke();
 
   // Secondary urban avenues
-  ctx.strokeStyle = 'rgba(98, 105, 115, 0.72)';
+  ctx.strokeStyle = isDark ? 'rgba(98, 105, 115, 0.72)' : 'rgba(203, 213, 225, 0.92)';
   ctx.lineWidth = 1.65;
   ctx.beginPath();
   for (const road of map.roads) {
@@ -373,8 +378,8 @@ function buildBaseMapCanvas(map: CityMap): HTMLCanvasElement {
   }
   ctx.stroke();
 
-  // Primary arterials: dark casing + mid-gray core
-  ctx.strokeStyle = '#1D2025';
+  // Primary arterials: casing + core
+  ctx.strokeStyle = isDark ? '#1D2025' : '#CBD5E1';
   ctx.lineWidth = 3.8;
   ctx.beginPath();
   for (const road of map.roads) {
@@ -384,7 +389,7 @@ function buildBaseMapCanvas(map: CityMap): HTMLCanvasElement {
   }
   ctx.stroke();
 
-  ctx.strokeStyle = '#6B727D';
+  ctx.strokeStyle = isDark ? '#6B727D' : '#FFFFFF';
   ctx.lineWidth = 1.9;
   ctx.beginPath();
   for (const road of map.roads) {
@@ -394,8 +399,8 @@ function buildBaseMapCanvas(map: CityMap): HTMLCanvasElement {
   }
   ctx.stroke();
 
-  // Ring roads & expressways: deep casing + bright cartographic slate-gray core + subtle center sheen
-  ctx.strokeStyle = '#171A1E';
+  // Ring roads & expressways
+  ctx.strokeStyle = isDark ? '#171A1E' : '#94A3B8';
   ctx.lineWidth = 5.6;
   ctx.beginPath();
   for (const road of map.roads) {
@@ -404,7 +409,7 @@ function buildBaseMapCanvas(map: CityMap): HTMLCanvasElement {
   }
   ctx.stroke();
 
-  ctx.strokeStyle = '#7E8591';
+  ctx.strokeStyle = isDark ? '#7E8591' : '#FEF3C7';
   ctx.lineWidth = 2.7;
   ctx.beginPath();
   for (const road of map.roads) {
@@ -413,7 +418,7 @@ function buildBaseMapCanvas(map: CityMap): HTMLCanvasElement {
   }
   ctx.stroke();
 
-  ctx.strokeStyle = 'rgba(203, 213, 225, 0.24)';
+  ctx.strokeStyle = isDark ? 'rgba(203, 213, 225, 0.24)' : 'rgba(217, 119, 6, 0.28)';
   ctx.lineWidth = 0.85;
   ctx.beginPath();
   for (const road of map.roads) {
@@ -427,11 +432,16 @@ function buildBaseMapCanvas(map: CityMap): HTMLCanvasElement {
   return off;
 }
 
+function getStyleForMapMode(styleId: OpenMapStyleId) {
+  if (styleId === 'canvas_vector') return getPureCanvasGeoStyle();
+  if (styleId === 'esri_dark_gray') return getEsriDarkGrayStyle();
+  return getEsriLightGrayStyle();
+}
+
 /**
- * Adds GeoJSON polygon layers for city rivers (Huangpu, Suzhou Creek, Tamsui, Keelung, etc.)
- * directly inside MapLibre GL as pure vector water polygons when Esri tiles fail or pure canvas mode is selected.
+ * Adds GeoJSON polygon layers for city rivers directly inside MapLibre GL as pure vector water polygons.
  */
-function attachGeoJsonRiversToMapLibre(mlMap: maplibregl.Map, cityMap: CityMap) {
+function attachGeoJsonRiversToMapLibre(mlMap: maplibregl.Map, cityMap: CityMap, isDark: boolean) {
   if (!cityMap.geoBounds) return;
   const geoJson = buildCityRiversGeoJson(cityMap);
   if (geoJson.features.length === 0) return;
@@ -448,7 +458,7 @@ function attachGeoJsonRiversToMapLibre(mlMap: maplibregl.Map, cityMap: CityMap) 
       type: 'line',
       source: 'city-rivers-geojson',
       paint: {
-        'line-color': '#18385E',
+        'line-color': isDark ? '#18385E' : '#9EC1DC',
         'line-width': 2.5,
       },
     });
@@ -459,7 +469,7 @@ function attachGeoJsonRiversToMapLibre(mlMap: maplibregl.Map, cityMap: CityMap) 
       type: 'fill',
       source: 'city-rivers-geojson',
       paint: {
-        'fill-color': '#061830',
+        'fill-color': isDark ? '#061830' : '#CBE0F0',
         'fill-opacity': 0.96,
       },
     });
@@ -581,10 +591,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       }
 
       pureVectorFallbackRef.current = uiRef.current.openMapStyle === 'canvas_vector';
-      const initialStyle =
-        uiRef.current.openMapStyle === 'canvas_vector'
-          ? getPureCanvasGeoStyle()
-          : getEsriDarkGrayStyle();
+      const initialStyle = getStyleForMapMode(uiRef.current.openMapStyle);
 
       const mlMap = new maplibregl.Map({
         container: mapEl,
@@ -611,7 +618,11 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
 
       mlMap.on('style.load', () => {
         if (pureVectorFallbackRef.current || uiRef.current.openMapStyle === 'canvas_vector') {
-          attachGeoJsonRiversToMapLibre(mlMap, simDataRef.current.map);
+          attachGeoJsonRiversToMapLibre(
+            mlMap,
+            simDataRef.current.map,
+            uiRef.current.openMapStyle === 'esri_dark_gray'
+          );
         }
       });
 
@@ -632,17 +643,12 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       };
     }, [mapSeedKey]);
 
-    // Switch between Esri Dark Gray Base and Pure GeoJSON Vector River style dynamically
+    // Switch dynamically between Esri Light Gray, Pure GeoJSON Vector, and Esri Dark Gray
     useEffect(() => {
       const mlMap = mlMapRef.current;
       if (!mlMap || !simDataRef.current.map.geoBounds) return;
-      if (openMapStyle === 'canvas_vector') {
-        pureVectorFallbackRef.current = true;
-        mlMap.setStyle(getPureCanvasGeoStyle());
-      } else {
-        pureVectorFallbackRef.current = false;
-        mlMap.setStyle(getEsriDarkGrayStyle());
-      }
+      pureVectorFallbackRef.current = openMapStyle === 'canvas_vector';
+      mlMap.setStyle(getStyleForMapMode(openMapStyle));
     }, [openMapStyle]);
 
     // Sync 2D / 2.5D pitch & bearing
@@ -684,9 +690,12 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
 
     useEffect(() => {
       if (!simDataRef.current.map.geoBounds) {
-        baseMapCanvasRef.current = buildBaseMapCanvas(simDataRef.current.map);
+        baseMapCanvasRef.current = buildBaseMapCanvas(
+          simDataRef.current.map,
+          openMapStyle === 'esri_dark_gray'
+        );
       }
-    }, [mapSeedKey, mapVersion]);
+    }, [mapSeedKey, mapVersion, openMapStyle]);
 
     useImperativeHandle(ref, () => ({
       zoomBy: (factor: number) => {
@@ -815,10 +824,12 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
             const mlMap = mlMapRef.current;
             const isGeoActive = Boolean(geo && mlMap);
 
+            const isDarkMap = st.openMapStyle === 'esri_dark_gray';
+
             if (isGeoActive) {
               ctx.clearRect(0, 0, w, h);
             } else {
-              ctx.fillStyle = '#2B2F35';
+              ctx.fillStyle = isDarkMap ? '#2B2F35' : '#F3F5F8';
               ctx.fillRect(0, 0, w, h);
             }
 
@@ -865,7 +876,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               ctx.drawImage(baseMapCanvasRef.current, 0, 0);
               ctx.restore();
             } else if (isGeoActive && pureVectorFallbackRef.current) {
-              // Pure canvas land silhouette + GeoJSON river & lake polygons (guaranteed 0 watermarks!)
+              // Pure canvas land silhouette + GeoJSON river & lake polygons
               ctx.save();
               for (const d of st.map.districts) {
                 const rings = d.polygons ?? (d.polygon ? [d.polygon] : []);
@@ -878,7 +889,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                     else ctx.lineTo(sp.x, sp.y);
                   });
                   ctx.closePath();
-                  ctx.fillStyle = '#1E2530';
+                  ctx.fillStyle = isDarkMap ? '#1E2530' : '#FFFFFF';
                   ctx.fill();
                 }
               }
@@ -892,7 +903,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                     else ctx.lineTo(sp.x, sp.y);
                   });
                   ctx.closePath();
-                  ctx.fillStyle = '#091322';
+                  ctx.fillStyle = isDarkMap ? '#091322' : '#CBE0F0';
                   ctx.fill();
                 }
               }
@@ -905,7 +916,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                     const msp = proj(mid.x, mid.y);
                     ctx.save();
                     ctx.font = '500 12px "Noto Sans TC", sans-serif';
-                    ctx.fillStyle = 'rgba(148, 163, 184, 0.45)';
+                    ctx.fillStyle = isDarkMap ? 'rgba(148, 163, 184, 0.45)' : 'rgba(51, 65, 85, 0.55)';
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
                     ctx.fillText(rv.name, msp.x, msp.y);
@@ -923,16 +934,16 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                     else ctx.lineTo(sp.x, sp.y);
                   });
                   ctx.closePath();
-                  ctx.fillStyle = 'rgba(11, 20, 34, 0.96)';
+                  ctx.fillStyle = isDarkMap ? 'rgba(11, 20, 34, 0.96)' : '#CBE0F0';
                   ctx.fill();
-                  ctx.strokeStyle = 'rgba(34, 48, 68, 0.9)';
+                  ctx.strokeStyle = isDarkMap ? 'rgba(34, 48, 68, 0.9)' : '#9EC1DC';
                   ctx.lineWidth = 1.5;
                   ctx.stroke();
 
                   const mid = rv.points[Math.floor(rv.points.length / 2)];
                   const msp = proj(mid.x, mid.y);
                   ctx.font = '500 12px "Noto Sans TC", sans-serif';
-                  ctx.fillStyle = 'rgba(148, 163, 184, 0.45)';
+                  ctx.fillStyle = isDarkMap ? 'rgba(148, 163, 184, 0.45)' : 'rgba(51, 65, 85, 0.55)';
                   ctx.textAlign = 'center';
                   ctx.textBaseline = 'middle';
                   ctx.fillText(rv.name, msp.x, msp.y);
@@ -940,10 +951,10 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                 }
               }
 
-              // Draw Overpass real streets cleanly on fallback dark background
+              // Draw real streets cleanly on pure vector canvas
               ctx.save();
-              ctx.strokeStyle = 'rgba(98, 105, 115, 0.55)';
-              ctx.lineWidth = 1.4;
+              ctx.strokeStyle = isDarkMap ? 'rgba(98, 105, 115, 0.55)' : 'rgba(148, 163, 184, 0.36)';
+              ctx.lineWidth = 1.3;
               for (const road of st.map.roads) {
                 if (
                   Math.max(road.x1, road.x2) < visMinX ||
@@ -1081,7 +1092,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               if (!st.is25D) {
                 if (zoomRatio > 0.45) {
                   ctx.lineWidth = 0.5;
-                  ctx.strokeStyle = 'rgba(255, 255, 255, 0.055)';
+                  ctx.strokeStyle = isDarkMap ? 'rgba(255, 255, 255, 0.055)' : 'rgba(15, 23, 42, 0.08)';
                   for (const b of st.map.buildings) {
                     if (b.x + b.w < visMinX || b.x > visMaxX || b.y + b.d < visMinY || b.y > visMaxY) {
                       continue;
@@ -1089,12 +1100,17 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                     ctx.save();
                     ctx.translate(b.x + b.w * 0.5, b.y + b.d * 0.5);
                     if (b.angle) ctx.rotate(b.angle);
-                    ctx.fillStyle =
-                      b.kind === 'landmark'
+                    ctx.fillStyle = isDarkMap
+                      ? b.kind === 'landmark'
                         ? 'rgba(72, 78, 88, 0.72)'
                         : b.kind === 'cbd'
                         ? 'rgba(62, 67, 76, 0.66)'
-                        : 'rgba(54, 58, 66, 0.58)';
+                        : 'rgba(54, 58, 66, 0.58)'
+                      : b.kind === 'landmark'
+                      ? 'rgba(203, 213, 225, 0.72)'
+                      : b.kind === 'cbd'
+                      ? 'rgba(214, 222, 232, 0.7)'
+                      : 'rgba(226, 232, 240, 0.68)';
                     ctx.fillRect(-b.w * 0.5, -b.d * 0.5, b.w, b.d);
                     ctx.strokeRect(-b.w * 0.5, -b.d * 0.5, b.w, b.d);
                     ctx.restore();
@@ -1111,17 +1127,22 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                   const ox = bh * skewX;
                   const oy = -bh;
 
-                  ctx.fillStyle = 'rgba(0, 0, 0, 0.36)';
+                  ctx.fillStyle = isDarkMap ? 'rgba(0, 0, 0, 0.36)' : 'rgba(15, 23, 42, 0.1)';
                   ctx.fillRect(b.x + 3, b.y + 3, b.w, b.d);
 
-                  ctx.fillStyle =
-                    b.kind === 'landmark'
+                  ctx.fillStyle = isDarkMap
+                    ? b.kind === 'landmark'
                       ? '#3A4352'
                       : b.kind === 'cbd'
                       ? '#333A46'
                       : b.kind === 'ind'
                       ? '#2D323B'
-                      : '#2B3038';
+                      : '#2B3038'
+                    : b.kind === 'landmark'
+                    ? '#CBD5E1'
+                    : b.kind === 'cbd'
+                    ? '#D4DCE6'
+                    : '#DCE3EC';
                   ctx.beginPath();
                   ctx.moveTo(b.x, b.y + b.d);
                   ctx.lineTo(b.x + b.w, b.y + b.d);
@@ -1130,10 +1151,11 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                   ctx.closePath();
                   ctx.fill();
 
-                  ctx.fillStyle =
-                    b.kind === 'landmark' ? '#4C5667' : b.kind === 'cbd' ? '#414856' : '#373D47';
+                  ctx.fillStyle = isDarkMap
+                    ? b.kind === 'landmark' ? '#4C5667' : b.kind === 'cbd' ? '#414856' : '#373D47'
+                    : b.kind === 'landmark' ? '#E2E8F0' : b.kind === 'cbd' ? '#EEF2F6' : '#F8FAFC';
                   ctx.fillRect(b.x + ox, b.y + oy, b.w, b.d);
-                  ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+                  ctx.strokeStyle = isDarkMap ? 'rgba(255, 255, 255, 0.08)' : 'rgba(15, 23, 42, 0.12)';
                   ctx.lineWidth = 0.6;
                   ctx.strokeRect(b.x + ox, b.y + oy, b.w, b.d);
                 }
@@ -1141,7 +1163,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               ctx.restore();
             } else if (st.is25D && zoomRatio > 0.7) {
               ctx.save();
-              ctx.globalAlpha = 0.72;
+              ctx.globalAlpha = isDarkMap ? 0.72 : 0.78;
               for (const b of st.map.buildings) {
                 if (b.x < visMinX || b.x > visMaxX || b.y < visMinY || b.y > visMaxY) continue;
                 const sp = proj(b.x, b.y);
@@ -1149,9 +1171,13 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                 const bw = Math.max(3, b.w * pxScale);
                 const bd = Math.max(3, b.d * pxScale);
                 const bh = b.h * 0.48 * pxScale;
-                ctx.fillStyle = b.kind === 'cbd' ? '#333A46' : '#2B3038';
+                ctx.fillStyle = isDarkMap
+                  ? b.kind === 'cbd' ? '#333A46' : '#2B3038'
+                  : b.kind === 'cbd' ? '#CBD5E1' : '#DCE3EC';
                 ctx.fillRect(sp.x, sp.y - bh, bw, bd + bh);
-                ctx.fillStyle = b.kind === 'cbd' ? '#414856' : '#373D47';
+                ctx.fillStyle = isDarkMap
+                  ? b.kind === 'cbd' ? '#414856' : '#373D47'
+                  : b.kind === 'cbd' ? '#F1F5F9' : '#FFFFFF';
                 ctx.fillRect(sp.x, sp.y - bh, bw, bd);
               }
               ctx.restore();
@@ -1185,20 +1211,24 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               }
 
               if (!d.unlocked) {
-                ctx.fillStyle = isHovered
-                  ? 'rgba(18, 24, 34, 0.44)'
-                  : 'rgba(4, 7, 13, 0.62)';
+                ctx.fillStyle = isDarkMap
+                  ? isHovered
+                    ? 'rgba(18, 24, 34, 0.44)'
+                    : 'rgba(4, 7, 13, 0.62)'
+                  : isHovered
+                  ? 'rgba(15, 23, 42, 0.14)'
+                  : 'rgba(15, 23, 42, 0.24)';
                 ctx.fill();
               }
 
               ctx.setLineDash(isHovered ? [] : [7, 5]);
               ctx.strokeStyle = !d.unlocked
                 ? isHovered
-                  ? 'rgba(251, 191, 36, 0.78)'
-                  : 'rgba(148, 163, 184, 0.24)'
+                  ? isDarkMap ? 'rgba(251, 191, 36, 0.78)' : '#D97706'
+                  : isDarkMap ? 'rgba(148, 163, 184, 0.24)' : 'rgba(15, 23, 42, 0.34)'
                 : d.isStarter
-                ? 'rgba(148, 163, 184, 0.26)'
-                : 'rgba(56, 189, 248, 0.28)';
+                ? isDarkMap ? 'rgba(148, 163, 184, 0.26)' : 'rgba(15, 23, 42, 0.22)'
+                : isDarkMap ? 'rgba(56, 189, 248, 0.28)' : 'rgba(37, 99, 235, 0.34)';
               ctx.lineWidth = isHovered ? 1.7 : 1.05;
               ctx.stroke();
               ctx.setLineDash([]);
@@ -1213,23 +1243,23 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
 
               if (d.unlocked) {
                 const fontSize = zoomRatio < 0.55 ? 10.5 : 12.5;
-                ctx.font = `600 ${fontSize}px "Noto Sans TC", "Plus Jakarta Sans", sans-serif`;
+                ctx.font = `600 ${fontSize}px "Noto Sans TC", "Manrope", sans-serif`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
-                ctx.lineWidth = 3;
-                ctx.strokeStyle = 'rgba(6, 11, 20, 0.85)';
+                ctx.lineWidth = 3.2;
+                ctx.strokeStyle = isDarkMap ? 'rgba(6, 11, 20, 0.85)' : 'rgba(255, 255, 255, 0.94)';
                 ctx.strokeText(d.name, p.x, p.y);
-                ctx.fillStyle = d.isStarter
-                  ? 'rgba(226, 232, 240, 0.88)'
-                  : 'rgba(186, 230, 253, 0.86)';
+                ctx.fillStyle = isDarkMap
+                  ? d.isStarter ? 'rgba(226, 232, 240, 0.88)' : 'rgba(186, 230, 253, 0.86)'
+                  : d.isStarter ? '#0F172A' : '#1E40AF';
                 ctx.fillText(d.name, p.x, p.y);
 
                 if (d.isStarter && zoomRatio >= 0.65) {
-                  ctx.font = '500 9.5px "Noto Sans TC", sans-serif';
-                  ctx.strokeStyle = 'rgba(6, 11, 20, 0.85)';
-                  ctx.lineWidth = 2.5;
+                  ctx.font = '600 9.5px "Noto Sans TC", sans-serif';
+                  ctx.strokeStyle = isDarkMap ? 'rgba(6, 11, 20, 0.85)' : 'rgba(255, 255, 255, 0.94)';
+                  ctx.lineWidth = 2.8;
                   ctx.strokeText('開局出生點', p.x, p.y + 13);
-                  ctx.fillStyle = 'rgba(110, 231, 183, 0.82)';
+                  ctx.fillStyle = isDarkMap ? 'rgba(110, 231, 183, 0.82)' : '#047857';
                   ctx.fillText('開局出生點', p.x, p.y + 13);
                 }
               } else {
@@ -1246,20 +1276,20 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                 const isHovered = hoveredDistrictRef.current === d.id;
                 nextLockedHitboxes.push({ id: d.id, x1: bx, y1: by, x2: bx + tw, y2: by + bh });
 
-                ctx.fillStyle = isHovered
-                  ? 'rgba(120, 53, 15, 0.92)'
-                  : 'rgba(9, 15, 26, 0.88)';
+                ctx.fillStyle = isDarkMap
+                  ? isHovered ? 'rgba(120, 53, 15, 0.92)' : 'rgba(9, 15, 26, 0.88)'
+                  : isHovered ? 'rgba(254, 243, 199, 0.98)' : 'rgba(255, 255, 255, 0.96)';
                 ctx.beginPath();
                 ctx.roundRect(bx, by, tw, bh, 6);
                 ctx.fill();
-                ctx.strokeStyle = isHovered
-                  ? 'rgba(251, 191, 36, 0.9)'
-                  : 'rgba(251, 191, 36, 0.36)';
+                ctx.strokeStyle = isDarkMap
+                  ? isHovered ? 'rgba(251, 191, 36, 0.9)' : 'rgba(251, 191, 36, 0.36)'
+                  : isHovered ? '#D97706' : 'rgba(148, 163, 184, 0.72)';
                 ctx.lineWidth = isHovered ? 1.4 : 1;
                 ctx.stroke();
-                ctx.fillStyle = isHovered
-                  ? 'rgba(254, 243, 199, 0.98)'
-                  : 'rgba(226, 232, 240, 0.9)';
+                ctx.fillStyle = isDarkMap
+                  ? isHovered ? 'rgba(254, 243, 199, 0.98)' : 'rgba(226, 232, 240, 0.9)'
+                  : isHovered ? '#92400E' : '#0F172A';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.fillText(label, p.x, p.y);
@@ -1277,12 +1307,12 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                 ctx.translate(p.x, p.y);
                 const diamondColor =
                   poi.kind === 'hospital'
-                    ? '#F43F5E'
+                    ? '#E11D48'
                     : poi.kind === 'airport' || poi.kind === 'rail'
-                    ? '#38BDF8'
+                    ? '#0284C7'
                     : poi.kind === 'park'
-                    ? '#10B981'
-                    : '#F59E0B';
+                    ? '#059669'
+                    : '#D97706';
                 ctx.fillStyle = diamondColor;
                 ctx.beginPath();
                 ctx.moveTo(0, -4.5);
@@ -1291,15 +1321,20 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                 ctx.lineTo(-4.5, 0);
                 ctx.closePath();
                 ctx.fill();
-                ctx.strokeStyle = '#07101D';
-                ctx.lineWidth = 1;
+                ctx.strokeStyle = isDarkMap ? '#07101D' : '#FFFFFF';
+                ctx.lineWidth = 1.2;
                 ctx.stroke();
 
                 if (zoomRatio > 0.72) {
                   ctx.font = '500 10.5px "Noto Sans TC", "Noto Sans SC", sans-serif';
-                  ctx.fillStyle = 'rgba(226, 232, 240, 0.84)';
                   ctx.textAlign = 'left';
                   ctx.textBaseline = 'middle';
+                  if (!isDarkMap) {
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+                    ctx.lineWidth = 2.6;
+                    ctx.strokeText(poi.name, 7, 0);
+                  }
+                  ctx.fillStyle = isDarkMap ? 'rgba(226, 232, 240, 0.84)' : '#334155';
                   ctx.fillText(poi.name, 7, 0);
                 }
                 ctx.restore();
@@ -1394,14 +1429,30 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
 
                 ctx.save();
                 ctx.globalAlpha = dimmed ? 0.14 : seg?.isDraft ? 0.78 : 1;
-                ctx.shadowColor = line.color;
-                ctx.shadowBlur = line.id === st.activeLineId ? 10 : 6;
+                if (isDarkMap) {
+                  ctx.shadowColor = line.color;
+                  ctx.shadowBlur = line.id === st.activeLineId ? 10 : 6;
+                } else {
+                  ctx.shadowBlur = 0;
+                }
                 if (seg?.isDraft) ctx.setLineDash([8, 6]);
+
+                const coreWidth =
+                  (line.id === st.activeLineId ? 5.0 : 3.8) *
+                  Math.min(1.35, Math.max(0.8, zoomRatio * 0.9));
 
                 ctx.beginPath();
                 screenPts.forEach((p, idx) => (idx === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+                if (!isDarkMap) {
+                  ctx.strokeStyle = 'rgba(255, 255, 255, 0.92)';
+                  ctx.lineWidth = coreWidth + 2.4;
+                  ctx.lineCap = 'round';
+                  ctx.lineJoin = 'round';
+                  ctx.stroke();
+                }
+
                 ctx.strokeStyle = line.color;
-                ctx.lineWidth = (line.id === st.activeLineId ? 4.8 : 3.8) * Math.min(1.35, Math.max(0.8, zoomRatio * 0.9));
+                ctx.lineWidth = coreWidth;
                 ctx.lineCap = 'round';
                 ctx.lineJoin = 'round';
                 ctx.stroke();
@@ -1410,13 +1461,13 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
 
                 if (seg?.isUnderwater) {
                   ctx.setLineDash([6, 6]);
-                  ctx.strokeStyle = 'rgba(224, 242, 254, 0.6)';
+                  ctx.strokeStyle = isDarkMap ? 'rgba(224, 242, 254, 0.6)' : 'rgba(255, 255, 255, 0.85)';
                   ctx.lineWidth = 1.4;
                   ctx.stroke();
                   ctx.setLineDash([]);
                 } else if (line.serviceMode === 'express') {
                   ctx.setLineDash([10, 8]);
-                  ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
+                  ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
                   ctx.lineWidth = 1.5;
                   ctx.stroke();
                   ctx.setLineDash([]);
@@ -1424,15 +1475,15 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
 
                 if ((zoomRatio > 0.85 || st.layers.depthFilter !== 'ALL') && seg && !dimmed) {
                   const mid = screenPts[Math.floor(screenPts.length / 2)];
-                  ctx.fillStyle = 'rgba(9, 15, 28, 0.92)';
+                  ctx.fillStyle = isDarkMap ? 'rgba(9, 15, 28, 0.92)' : 'rgba(255, 255, 255, 0.96)';
                   ctx.beginPath();
                   ctx.roundRect(mid.x - 12, mid.y - 8, 24, 15, 3);
                   ctx.fill();
                   ctx.strokeStyle = line.color;
-                  ctx.lineWidth = 0.9;
+                  ctx.lineWidth = 1.1;
                   ctx.stroke();
-                  ctx.fillStyle = '#E2E8F0';
-                  ctx.font = '600 9px "JetBrains Mono", monospace';
+                  ctx.fillStyle = isDarkMap ? '#E2E8F0' : '#0F172A';
+                  ctx.font = '600 9px "IBM Plex Mono", monospace';
                   ctx.textAlign = 'center';
                   ctx.textBaseline = 'middle';
                   ctx.fillText(seg.depth, mid.x, mid.y);
@@ -1498,13 +1549,22 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                 const trainLen = Math.min(26, 11 + line.carCount * 1.4);
                 const trainW = 6.8;
 
-                ctx.shadowColor = line.color;
-                ctx.shadowBlur = 8;
+                if (isDarkMap) {
+                  ctx.shadowColor = line.color;
+                  ctx.shadowBlur = 8;
+                } else {
+                  ctx.shadowBlur = 0;
+                }
                 ctx.fillStyle = '#FFFFFF';
                 ctx.beginPath();
                 ctx.roundRect(-trainLen / 2, -trainW / 2, trainLen, trainW, 3);
                 ctx.fill();
                 ctx.shadowBlur = 0;
+                if (!isDarkMap) {
+                  ctx.strokeStyle = 'rgba(15, 23, 42, 0.45)';
+                  ctx.lineWidth = 0.9;
+                  ctx.stroke();
+                }
 
                 const loadRatio = Math.min(1, train.passengers.length / Math.max(1, train.capacity));
                 ctx.fillStyle = line.color;
@@ -1601,21 +1661,28 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               }
 
               if (zoomRatio > 0.62 || isSelected || isHovered || servingLines.length >= 2 || station.isDraft) {
-                ctx.font = '500 10.5px "Noto Sans TC", "Plus Jakarta Sans", sans-serif';
+                ctx.font = '600 10.5px "Noto Sans TC", "Manrope", sans-serif';
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'top';
                 const labelY = sy + rad + 4;
                 const displayName = station.isDraft ? `${station.name} *` : station.name;
                 const metrics = ctx.measureText(displayName);
                 const labelW = metrics.width + 10;
-                ctx.fillStyle = station.isDraft
-                  ? 'rgba(14, 116, 144, 0.85)'
-                  : 'rgba(7, 15, 28, 0.88)';
+                ctx.fillStyle = isDarkMap
+                  ? station.isDraft ? 'rgba(14, 116, 144, 0.85)' : 'rgba(7, 15, 28, 0.88)'
+                  : station.isDraft ? 'rgba(239, 246, 255, 0.96)' : 'rgba(255, 255, 255, 0.95)';
                 ctx.beginPath();
                 ctx.roundRect(sx - labelW / 2, labelY - 1, labelW, 16, 4);
                 ctx.fill();
+                if (!isDarkMap) {
+                  ctx.strokeStyle = station.isDraft ? 'rgba(59, 130, 246, 0.55)' : 'rgba(203, 213, 225, 0.95)';
+                  ctx.lineWidth = 0.9;
+                  ctx.stroke();
+                }
 
-                ctx.fillStyle = '#E2E8F0';
+                ctx.fillStyle = isDarkMap
+                  ? '#E2E8F0'
+                  : station.isDraft ? '#1D4ED8' : '#0F172A';
                 ctx.fillText(displayName, sx, labelY + 1.5);
               }
             }
@@ -1740,20 +1807,24 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               }
 
               if (badgeText) {
-                ctx.font = '500 11px "Noto Sans TC", "JetBrains Mono", sans-serif';
+                ctx.font = '500 11px "Noto Sans TC", "IBM Plex Mono", sans-serif';
                 const tw = ctx.measureText(badgeText).width + 18;
                 const bx = Math.min(w - tw - 12, hw.screenX + 18);
                 const by = Math.max(76, hw.screenY - 30);
-                ctx.fillStyle = isBlockedTooltip ? 'rgba(69, 10, 24, 0.94)' : 'rgba(11, 20, 34, 0.92)';
+                ctx.fillStyle = isDarkMap
+                  ? isBlockedTooltip ? 'rgba(69, 10, 24, 0.94)' : 'rgba(11, 20, 34, 0.92)'
+                  : isBlockedTooltip ? 'rgba(254, 242, 242, 0.97)' : 'rgba(255, 255, 255, 0.97)';
                 ctx.beginPath();
-                ctx.roundRect(bx, by, tw, 26, 8);
+                ctx.roundRect(bx, by, tw, 26, 6);
                 ctx.fill();
-                ctx.strokeStyle = isBlockedTooltip
-                  ? 'rgba(244, 63, 94, 0.72)'
-                  : 'rgba(56, 189, 248, 0.25)';
+                ctx.strokeStyle = isDarkMap
+                  ? isBlockedTooltip ? 'rgba(244, 63, 94, 0.72)' : 'rgba(56, 189, 248, 0.25)'
+                  : isBlockedTooltip ? 'rgba(220, 38, 38, 0.65)' : 'rgba(203, 213, 225, 0.95)';
                 ctx.lineWidth = 1;
                 ctx.stroke();
-                ctx.fillStyle = isBlockedTooltip ? '#FECDD3' : '#F1F5F9';
+                ctx.fillStyle = isDarkMap
+                  ? isBlockedTooltip ? '#FECDD3' : '#F1F5F9'
+                  : isBlockedTooltip ? '#991B1B' : '#0F172A';
                 ctx.textAlign = 'left';
                 ctx.textBaseline = 'middle';
                 ctx.fillText(badgeText, bx + 9, by + 13);
@@ -1991,10 +2062,20 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       cam.zoom = nextZoom;
     };
 
+    const isDarkMapStyle = openMapStyle === 'esri_dark_gray';
+
     return (
       <div
         ref={containerRef}
-        className={`absolute inset-0 w-full h-full overflow-hidden ${hasGeo ? 'bg-[#091322]' : 'bg-[#2B2F35]'}`}
+        className={`absolute inset-0 w-full h-full overflow-hidden ${
+          hasGeo
+            ? isDarkMapStyle
+              ? 'bg-[#091322]'
+              : 'bg-[#EEF1F4]'
+            : isDarkMapStyle
+            ? 'bg-[#2B2F35]'
+            : 'bg-[#F3F5F8]'
+        }`}
         style={{
           perspective: !hasGeo && is25D ? '1400px' : undefined,
         }}
@@ -2005,7 +2086,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
             transform: !hasGeo && is25D ? 'rotateX(24deg) scale(1.06)' : 'none',
           }}
         >
-          {/* MapLibre GL Raster Base (Esri World Dark Gray Base) or Pure GeoJSON Vector River Fallback */}
+          {/* MapLibre GL Raster Base or Pure GeoJSON Vector Fallback */}
           <div
             ref={mapContainerRef}
             style={{
@@ -2048,28 +2129,44 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
 
         {hoveredRoadTooltip && (
           <div
-            className="pointer-events-none absolute z-20 px-3.5 py-2.5 rounded-xl bg-[#0B1422]/90 backdrop-blur-xl border border-white/10 shadow-2xl min-w-[205px]"
+            className={`pointer-events-none absolute z-20 px-3.5 py-2.5 rounded-lg border shadow-lg min-w-[205px] ${
+              isDarkMapStyle
+                ? 'bg-[#0B1422]/92 border-white/10 text-slate-100'
+                : 'bg-white/97 border-slate-200 text-slate-900'
+            }`}
             style={{
               left: Math.min(window.innerWidth - 230, hoveredRoadTooltip.sx + 16),
               top: Math.max(76, hoveredRoadTooltip.sy - 68),
             }}
           >
-            <div className="text-xs font-semibold text-slate-100">{hoveredRoadTooltip.name}</div>
-            <div className="text-[11px] text-slate-300 mt-1 font-mono-tabular">
+            <div className="text-xs font-semibold">{hoveredRoadTooltip.name}</div>
+            <div
+              className={`text-[11px] mt-1 font-mono-tabular ${
+                isDarkMapStyle ? 'text-slate-300' : 'text-slate-600'
+              }`}
+            >
               當前飽和度 (流量/通行能力)：
               <span
                 className={
                   hoveredRoadTooltip.saturationPct > 65
-                    ? 'text-rose-400 font-semibold'
+                    ? isDarkMapStyle
+                      ? 'text-rose-400 font-semibold'
+                      : 'text-rose-600 font-semibold'
                     : hoveredRoadTooltip.saturationPct > 40
-                    ? 'text-amber-300 font-semibold'
-                    : 'text-emerald-400 font-semibold'
+                    ? isDarkMapStyle
+                      ? 'text-amber-300 font-semibold'
+                      : 'text-amber-600 font-semibold'
+                    : isDarkMapStyle
+                    ? 'text-emerald-400 font-semibold'
+                    : 'text-emerald-700 font-semibold'
                 }
               >
                 {hoveredRoadTooltip.saturationPct}%
               </span>
             </div>
-            <div className="text-[10px] text-slate-500 mt-0.5">點擊地鐵站點可規劃分流路線</div>
+            <div className={`text-[10px] mt-0.5 ${isDarkMapStyle ? 'text-slate-500' : 'text-slate-400'}`}>
+              點擊地鐵站點可規劃分流路線
+            </div>
           </div>
         )}
 
@@ -2077,20 +2174,32 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
         <div className="pointer-events-none fixed bottom-7 left-20 z-20 px-1.5">
           <div
             ref={scaleTextRef}
-            className="text-[11px] font-mono-tabular font-semibold text-slate-200 mb-1 drop-shadow"
+            className={`text-[11px] font-mono-tabular font-semibold mb-1 ${
+              isDarkMapStyle ? 'text-slate-200 drop-shadow' : 'text-slate-800'
+            }`}
           >
             1 km
           </div>
           <div
             ref={scaleLineRef}
             style={{ width: '96px' }}
-            className="h-1.5 border-l-2 border-r-2 border-b-2 border-slate-200/85"
+            className={`h-1.5 border-l-2 border-r-2 border-b-2 ${
+              isDarkMapStyle ? 'border-slate-200/85' : 'border-slate-800/85'
+            }`}
           />
         </div>
 
         {hasGeo && (
-          <div className="pointer-events-none fixed bottom-2.5 left-20 z-10 text-[10px] text-slate-400/80 font-mono-tabular">
-            Tiles © Esri World Dark Gray · Vector © OpenStreetMap / MapLibre GL
+          <div
+            className={`pointer-events-none fixed bottom-2.5 left-20 z-10 text-[10px] font-mono-tabular ${
+              isDarkMapStyle ? 'text-slate-400/80' : 'text-slate-500'
+            }`}
+          >
+            {openMapStyle === 'canvas_vector'
+              ? 'Pure GeoJSON Vector Atlas · OpenStreetMap Geography'
+              : openMapStyle === 'esri_dark_gray'
+              ? 'Tiles © Esri World Dark Gray · Vector © OpenStreetMap / MapLibre GL'
+              : 'Tiles © Esri World Light Gray · Vector © OpenStreetMap / MapLibre GL'}
           </div>
         )}
       </div>

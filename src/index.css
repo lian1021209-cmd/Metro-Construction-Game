@@ -2,14 +2,14 @@
 
 @layer base {
   :root {
-    --font-sans: 'Plus Jakarta Sans', 'Noto Sans TC', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
-    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+    --font-sans: 'Manrope', 'Noto Sans TC', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, monospace;
   }
 
   body {
     font-family: var(--font-sans);
-    background-color: #0B111E;
-    color: #E2E8F0;
+    background-color: #F5F7FA;
+    color: #0F172A;
     user-select: none;
   }
 }
@@ -19,7 +19,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Subtle architectural scrollbar */
+/* Clean minimalist scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -30,10 +30,10 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.25);
+  background: rgba(15, 23, 42, 0.16);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.4);
+  background: rgba(15, 23, 42, 0.3);
 }

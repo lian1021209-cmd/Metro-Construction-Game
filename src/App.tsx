@@ -319,7 +319,7 @@ export default function App() {
   });
 
   const [lang, setLang] = useState<Language>('zh-Hant');
-  const [openMapStyle, setOpenMapStyle] = useState<OpenMapStyleId>('esri_dark_gray');
+  const [openMapStyle, setOpenMapStyle] = useState<OpenMapStyleId>('esri_light_gray');
   const [screen, setScreen] = useState<'TITLE' | 'PLAYING'>('TITLE');
   const [realCityId, setRealCityId] = useState<RealCityId>('shanghai');
   const [difficultyId, setDifficultyId] = useState<DifficultyLevel>('normal');
@@ -1341,7 +1341,7 @@ export default function App() {
   }, [stats.congestionIndex, stats.coveragePercent]);
 
   return (
-    <div className="relative h-screen w-screen overflow-hidden bg-[#060D19] text-slate-100">
+    <div className="relative h-screen w-screen overflow-hidden bg-[#F5F7FA] text-slate-900">
       {screen === 'TITLE' ? (
         <TitleScreen
           currentCityLabel={`${simDataRef.current.map.name} · ${year}年`}
@@ -1487,9 +1487,9 @@ export default function App() {
             unreadCircleCount={unreadCircleCount}
           />
 
-          {/* Subtle Non-Blocking Glass Toast */}
+          {/* Clean Architectural Toast Notification */}
           {toast && (
-            <div className="pointer-events-none fixed top-20 left-1/2 -translate-x-1/2 z-40 px-4 py-2 rounded-full bg-[#0A1322]/90 backdrop-blur-xl border border-sky-400/35 text-xs font-medium text-slate-100 shadow-xl">
+            <div className="pointer-events-none fixed top-20 left-1/2 -translate-x-1/2 z-40 px-4 py-2 rounded-lg bg-white/95 backdrop-blur-sm border border-slate-200 text-xs font-medium text-slate-900 shadow-[0_8px_24px_rgba(15,23,42,0.1)]">
               {toast}
             </div>
           )}
