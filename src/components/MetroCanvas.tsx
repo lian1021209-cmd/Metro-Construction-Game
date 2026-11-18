@@ -1,5 +1,6 @@
 import React, { useEffect, useImperativeHandle, useRef, useState } from 'react';
 import * as maplibregl from 'maplibre-gl';
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   CityMap,
@@ -42,6 +43,10 @@ import {
 } from '../engine/geo';
 import { suggestStationName } from '../engine/noise';
 import { formatCurrencyWan } from '../i18n/translations';
+
+if (typeof window !== 'undefined' && maplibreWorkerUrl) {
+  maplibregl.setWorkerUrl(maplibreWorkerUrl);
+}
 
 function getGeoFitBounds(geo: GeoBounds, map?: CityMap): [[number, number], [number, number]] {
   if (map && map.districts.length > 0) {
