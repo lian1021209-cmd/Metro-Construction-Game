@@ -267,6 +267,7 @@ export function suggestStationName(
   wy: number,
   existingStations: Station[] = []
 ): string {
+  // World scale ~50 m/px: 4 px ≈ 200 m, 10 px ≈ 500 m
   const places = getProjectedShanghaiPlaces(map);
   const nearestPois = map.pois
     .map((p) => ({ name: cleanPlaceLabel(p.name), dist: Math.hypot(wx - p.x, wy - p.y) }))
@@ -277,32 +278,46 @@ export function suggestStationName(
     .sort((a, b) => a.dist - b.dist);
 
   const nearestLandmarkPlace = nearestPlaces.find((p) => p.kind === 'landmark');
-  const nearestSubPlace = nearestPlaces[0];
-  const nearbyRoads = findNearestRoads(map, wx, wy, 11);
+  const nearestSubPlace = nearestPlaces.find((p) => p.kind !== 'landmark') ?? nearestPlaces[0];
+  const nearbyRoads = findNearestRoads(map, wx, wy, 10);
   const containingDist = findDistrictAt(map, wx, wy);
 
   const hints: string[] = [];
   for (const r of nearbyRoads.slice(1, 3)) hints.push(r.name);
-  if (nearestSubPlace && nearestSubPlace.dist < 55) hints.push(nearestSubPlace.name);
+  if (nearestSubPlace && nearestSubPlace.dist < 32) hints.push(nearestSubPlace.name);
   if (containingDist) hints.push(shortDistrictName(containingDist.name));
 
   let primaryCandidate: string | null = null;
 
-  // Tier 1: Special building / university / hospital / rail hub / park directly at coordinate (~600m)
-  if (nearestPois[0] && nearestPois[0].dist <= 12) {
+  // Tier 1: Direct landmark/POI right at the station site (~200m = 4.2px)
+  // Anything 500m (~10px) away will NOT steal a distant hub/landmark name.
+  if (nearestPois[0] && nearestPois[0].dist <= 4.2) {
     primaryCandidate = nearestPois[0].name;
-  } else if (nearestLandmarkPlace && nearestLandmarkPlace.dist <= 14) {
+  } else if (nearestLandmarkPlace && nearestLandmarkPlace.dist <= 4.2) {
     primaryCandidate = nearestLandmarkPlace.name;
   }
 
-  // Tier 2: Actual street / avenue from Overpass road network (~450m)
-  if (!primaryCandidate && nearbyRoads.length > 0 && nearbyRoads[0].dist <= 9) {
-    primaryCandidate = nearbyRoads[0].name;
+  // Tier 2: Pick the closest local street (Overpass) or local neighborhood/road (Gazetteer) within ~420m (8.5px)
+  if (!primaryCandidate) {
+    const roadBest = nearbyRoads[0] && !nearbyRoads[0].isCode && nearbyRoads[0].dist <= 6.5 ? nearbyRoads[0] : null;
+    const placeBest = nearestSubPlace && nearestSubPlace.dist <= 8.5 ? nearestSubPlace : null;
+
+    if (roadBest && placeBest) {
+      primaryCandidate = roadBest.dist <= placeBest.dist + 1.2 ? roadBest.name : placeBest.name;
+    } else if (roadBest) {
+      primaryCandidate = roadBest.name;
+    } else if (placeBest) {
+      primaryCandidate = placeBest.name;
+    }
+
     // If that road name already has a station, try forming a real street intersection first
     if (
+      primaryCandidate &&
+      nearbyRoads[0] &&
+      primaryCandidate === nearbyRoads[0].name &&
       existingStations.some((s) => s.name === primaryCandidate) &&
       nearbyRoads[1] &&
-      nearbyRoads[1].dist <= 8 &&
+      nearbyRoads[1].dist <= 6.5 &&
       !nearbyRoads[1].isCode
     ) {
       const intersection = `${nearbyRoads[0].name}·${nearbyRoads[1].name}`;
@@ -312,9 +327,15 @@ export function suggestStationName(
     }
   }
 
-  // Tier 3: Nearest real Shanghai road, neighborhood, or town/subdistrict (~2.8km)
-  if (!primaryCandidate && nearestSubPlace && nearestSubPlace.dist <= 56) {
+  // Tier 3: Medium-range Overpass road (~550m) or nearest local street/neighborhood (~1.4km)
+  if (!primaryCandidate && nearbyRoads[0] && nearbyRoads[0].dist <= 11) {
+    primaryCandidate = nearbyRoads[0].name;
+  }
+  if (!primaryCandidate && nearestSubPlace && nearestSubPlace.dist <= 28) {
     primaryCandidate = nearestSubPlace.name;
+  }
+  if (!primaryCandidate && nearestPlaces[0] && nearestPlaces[0].dist <= 28) {
+    primaryCandidate = nearestPlaces[0].name;
   }
 
   // Tier 4: Containing administrative district + compass quadrant if far from district center
@@ -322,7 +343,7 @@ export function suggestStationName(
     const shortName = shortDistrictName(containingDist.name);
     const distFromCenter = Math.hypot(wx - containingDist.x, wy - containingDist.y);
     primaryCandidate =
-      distFromCenter > 42
+      distFromCenter > 36
         ? `${shortName}${compassDirection(wx - containingDist.x, wy - containingDist.y)}`
         : shortName;
   }
@@ -365,22 +386,35 @@ export function resolveNominatimStationName(
   if (subdistrict) hints.push(subdistrict);
   if (road) hints.push(road);
 
-  // Preserve iconic nearby map POI (~350m) if player clicked straight onto a major landmark
-  // unless Nominatim itself identified a specific landmark right there
+  // Only snap to a map POI/landmark if player clicked directly at it (~180m = 3.6px)
   const veryClosePoi = map.pois
     .map((p) => ({ name: cleanPlaceLabel(p.name), dist: Math.hypot(wx - p.x, wy - p.y) }))
-    .filter((p) => p.dist <= 7)
+    .filter((p) => p.dist <= 3.6)
     .sort((a, b) => a.dist - b.dist)[0];
 
   const places = getProjectedShanghaiPlaces(map);
   const veryCloseLandmark = places
     .filter((p) => p.kind === 'landmark')
     .map((p) => ({ name: p.name, dist: Math.hypot(wx - p.x, wy - p.y) }))
-    .filter((p) => p.dist <= 7)
+    .filter((p) => p.dist <= 3.6)
     .sort((a, b) => a.dist - b.dist)[0];
 
+  // Prevent huge railway/airport polygon tags from hijacking nearby city streets 400-500m away
+  const isMajorHubTag =
+    landmark.includes('火車站') ||
+    (landmark.includes('站') && (landmark.includes('上海') || landmark.includes('虹橋'))) ||
+    landmark.includes('機場');
+  const distToNearestRailPoi = map.pois
+    .filter((p) => p.kind === 'rail' || p.kind === 'airport')
+    .reduce((min, p) => Math.min(min, Math.hypot(wx - p.x, wy - p.y)), Infinity);
+
   let base: string | null = null;
-  if (landmark && landmark.length >= 2 && landmark.length <= 16) {
+  if (
+    landmark &&
+    landmark.length >= 2 &&
+    landmark.length <= 16 &&
+    (!isMajorHubTag || distToNearestRailPoi <= 4.2 || (!road && !neighborhood))
+  ) {
     base = landmark;
   } else if (veryClosePoi) {
     base = veryClosePoi.name;

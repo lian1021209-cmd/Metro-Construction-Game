@@ -288,12 +288,12 @@ export async function fetchOverpassCityGeometry(
   const query = `
 [out:json][timeout:14];
 (
-  way["highway"~"motorway|trunk|primary|secondary"](${bounds.centerLat - dLatRoad},${bounds.centerLon - dLonRoad},${bounds.centerLat + dLatRoad},${bounds.centerLon + dLonRoad});
+  way["highway"~"motorway|trunk|primary|secondary|tertiary"]["name"](${bounds.centerLat - dLatRoad},${bounds.centerLon - dLonRoad},${bounds.centerLat + dLatRoad},${bounds.centerLon + dLonRoad});
   way["building"](${bounds.centerLat - dLatBld},${bounds.centerLon - dLonBld},${bounds.centerLat + dLatBld},${bounds.centerLon + dLonBld});
   node["amenity"~"university|hospital"]["name"](${bounds.centerLat - dLatRoad},${bounds.centerLon - dLonRoad},${bounds.centerLat + dLatRoad},${bounds.centerLon + dLonRoad});
   node["aeroway"="terminal"]["name"](${bounds.centerLat - 0.35},${bounds.centerLon - 0.45},${bounds.centerLat + 0.35},${bounds.centerLon + 0.45});
 );
-out body 1800;
+out body 4200;
 >;
 out skel qt;
 `.trim();
@@ -505,7 +505,7 @@ export async function reverseGeocodeStationPlace(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 3500);
     const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat.toFixed(6)}&lon=${lon.toFixed(6)}&zoom=17&accept-language=zh-TW`,
+      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat.toFixed(6)}&lon=${lon.toFixed(6)}&zoom=18&accept-language=zh-TW`,
       { signal: controller.signal }
     );
     clearTimeout(timer);
