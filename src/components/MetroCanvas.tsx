@@ -483,7 +483,7 @@ function upsertGeoJsonSource(
   mlMap: maplibregl.Map,
   sourceId: string,
   data: unknown,
-  opts?: { promoteId?: string; tolerance?: number }
+  opts?: { promoteId?: string; tolerance?: number; buffer?: number; maxzoom?: number }
 ): boolean {
   const existing = mlMap.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
   if (existing && typeof existing.setData === 'function') {
@@ -494,7 +494,9 @@ function upsertGeoJsonSource(
     type: 'geojson',
     data: data as maplibregl.GeoJSONSourceSpecification['data'],
     ...(opts?.promoteId ? { promoteId: opts.promoteId } : {}),
-    ...(opts?.tolerance !== undefined ? { tolerance: opts.tolerance } : {}),
+    tolerance: opts?.tolerance ?? 0,
+    buffer: opts?.buffer ?? 128,
+    maxzoom: opts?.maxzoom ?? 16,
   });
   return true;
 }
@@ -509,7 +511,7 @@ function syncMapLibreVectorLayers(
   styleId: OpenMapStyleId,
   isFallback: boolean
 ) {
-  if (!cityMap.geoBounds || !mlMap.isStyleLoaded()) return;
+  if (!cityMap.geoBounds || !mlMap.getStyle()) return;
 
   const isDark = styleId === 'esri_dark_gray';
   const useVectorBase = isFallback || styleId === 'canvas_vector';
@@ -517,7 +519,11 @@ function syncMapLibreVectorLayers(
   if (useVectorBase) {
     const landData = buildPureLandGeoJson(cityMap);
     if (landData.features.length > 0) {
-      upsertGeoJsonSource(mlMap, 'pure-land-geojson', landData, { tolerance: 0.12 });
+      upsertGeoJsonSource(mlMap, 'pure-land-geojson', landData, {
+        tolerance: 0,
+        buffer: 128,
+        maxzoom: 16,
+      });
       if (!mlMap.getLayer('pure-land-fill')) {
         mlMap.addLayer({
           id: 'pure-land-fill',
@@ -534,6 +540,7 @@ function syncMapLibreVectorLayers(
           id: 'pure-land-coast',
           type: 'line',
           source: 'pure-land-geojson',
+          layout: { 'line-join': 'round', 'line-cap': 'round' },
           paint: {
             'line-color': isDark ? 'rgba(51, 65, 85, 0.55)' : 'rgba(148, 163, 184, 0.35)',
             'line-width': 0.9,
@@ -544,7 +551,11 @@ function syncMapLibreVectorLayers(
 
     const waterPolys = buildWaterPolygonsGeoJson(cityMap);
     if (waterPolys.features.length > 0) {
-      upsertGeoJsonSource(mlMap, 'city-water-polygons-geojson', waterPolys, { tolerance: 0.1 });
+      upsertGeoJsonSource(mlMap, 'city-water-polygons-geojson', waterPolys, {
+        tolerance: 0,
+        buffer: 128,
+        maxzoom: 16,
+      });
       if (!mlMap.getLayer('city-water-polygons-fill')) {
         mlMap.addLayer({
           id: 'city-water-polygons-fill',
@@ -561,6 +572,7 @@ function syncMapLibreVectorLayers(
           id: 'city-water-polygons-line',
           type: 'line',
           source: 'city-water-polygons-geojson',
+          layout: { 'line-join': 'round', 'line-cap': 'round' },
           paint: {
             'line-color': isDark ? '#18385E' : '#9EC1DC',
             'line-width': 1.2,
@@ -571,12 +583,17 @@ function syncMapLibreVectorLayers(
 
     const riversData = buildCityRiversGeoJson(cityMap);
     if (riversData.features.length > 0) {
-      upsertGeoJsonSource(mlMap, 'city-rivers-geojson', riversData, { tolerance: 0.12 });
+      upsertGeoJsonSource(mlMap, 'city-rivers-geojson', riversData, {
+        tolerance: 0,
+        buffer: 128,
+        maxzoom: 16,
+      });
       if (!mlMap.getLayer('city-rivers-casing')) {
         mlMap.addLayer({
           id: 'city-rivers-casing',
           type: 'line',
           source: 'city-rivers-geojson',
+          layout: { 'line-join': 'round', 'line-cap': 'round' },
           paint: {
             'line-color': isDark ? '#18385E' : '#9EC1DC',
             'line-width': 2.0,
@@ -605,7 +622,9 @@ function syncMapLibreVectorLayers(
 
   upsertGeoJsonSource(mlMap, 'city-regions-geojson', regionsData, {
     promoteId: 'regionId',
-    tolerance: 0.1,
+    tolerance: 0,
+    buffer: 128,
+    maxzoom: 16,
   });
 
   if (!mlMap.getLayer('city-regions-fill')) {
@@ -650,14 +669,15 @@ function syncMapLibreVectorLayers(
       type: 'line',
       source: 'city-regions-geojson',
       filter: ['==', ['get', 'unlocked'], true],
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: {
         'line-color': [
           'case',
           ['==', ['get', 'isStarter'], true],
-          isDark ? 'rgba(148, 163, 184, 0.28)' : 'rgba(15, 23, 42, 0.24)',
-          isDark ? 'rgba(56, 189, 248, 0.36)' : 'rgba(37, 99, 235, 0.40)',
+          isDark ? 'rgba(148, 163, 184, 0.34)' : 'rgba(15, 23, 42, 0.30)',
+          isDark ? 'rgba(56, 189, 248, 0.52)' : 'rgba(37, 99, 235, 0.54)',
         ],
-        'line-width': 1.1,
+        'line-width': ['interpolate', ['linear'], ['zoom'], 6, 1.0, 10, 1.35, 14, 1.75],
       },
     });
   }
@@ -668,28 +688,29 @@ function syncMapLibreVectorLayers(
       type: 'line',
       source: 'city-regions-geojson',
       filter: ['==', ['get', 'unlocked'], false],
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: {
-        'line-dasharray': [5, 4],
+        'line-dasharray': [6, 4],
         'line-color': [
           'case',
           ['==', ['get', 'tier'], 1],
-          isDark ? 'rgba(148, 163, 184, 0.36)' : 'rgba(15, 23, 42, 0.42)',
+          isDark ? 'rgba(148, 163, 184, 0.48)' : 'rgba(15, 23, 42, 0.50)',
           ['==', ['get', 'tier'], 2],
           [
             'case',
             ['==', ['get', 'canUnlock'], true],
-            isDark ? 'rgba(251, 191, 36, 0.45)' : 'rgba(217, 119, 6, 0.55)',
-            isDark ? 'rgba(148, 163, 184, 0.24)' : 'rgba(15, 23, 42, 0.30)',
+            isDark ? 'rgba(251, 191, 36, 0.65)' : 'rgba(217, 119, 6, 0.72)',
+            isDark ? 'rgba(148, 163, 184, 0.34)' : 'rgba(15, 23, 42, 0.38)',
           ],
-          isDark ? 'rgba(148, 163, 184, 0.32)' : 'rgba(15, 23, 42, 0.34)',
+          isDark ? 'rgba(148, 163, 184, 0.42)' : 'rgba(15, 23, 42, 0.44)',
         ],
         'line-width': [
           'case',
           ['==', ['get', 'tier'], 1],
-          1.5,
+          1.8,
           ['all', ['==', ['get', 'tier'], 2], ['==', ['get', 'canUnlock'], true]],
-          1.4,
-          1.05,
+          1.65,
+          1.35,
         ],
         'line-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0, 1],
       },
@@ -702,20 +723,21 @@ function syncMapLibreVectorLayers(
       type: 'line',
       source: 'city-regions-geojson',
       filter: ['==', ['get', 'unlocked'], false],
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
       paint: {
         'line-color': [
           'case',
           ['==', ['get', 'tier'], 3],
-          isDark ? 'rgba(251, 191, 36, 0.85)' : '#D97706',
+          isDark ? 'rgba(251, 191, 36, 0.92)' : '#D97706',
           '#D97706',
         ],
         'line-width': [
           'case',
           ['==', ['get', 'tier'], 1],
-          2.2,
+          2.6,
           ['==', ['get', 'tier'], 2],
-          2.0,
-          1.8,
+          2.3,
+          2.1,
         ],
         'line-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 1, 0],
       },
@@ -774,6 +796,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
     >([]);
     const hoveredDistrictRef = useRef<string | null>(null);
     const prevHoveredRegionRef = useRef<string | null>(null);
+    const prevMapStyleRef = useRef<OpenMapStyleId>(openMapStyle);
     const [isHoveringDistrict, setIsHoveringDistrict] = useState(false);
     const hoverPrefetchTimerRef = useRef<number | null>(null);
     const lastPrefetchKeyRef = useRef<string>('');
@@ -863,8 +886,16 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       let tileErrorCount = 0;
       let switchedToFallback = false;
 
+      prevMapStyleRef.current = uiRef.current.openMapStyle;
+
       mlMap.on('load', () => {
         mlMap.resize();
+        syncMapLibreVectorLayers(
+          mlMap,
+          simDataRef.current.map,
+          uiRef.current.openMapStyle,
+          pureVectorFallbackRef.current
+        );
       });
 
       mlMap.on('style.load', () => {
@@ -877,12 +908,15 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
         );
       });
 
-      mlMap.on('error', () => {
-        tileErrorCount += 1;
-        if (!switchedToFallback && tileErrorCount >= 3) {
-          switchedToFallback = true;
-          pureVectorFallbackRef.current = true;
-          mlMap.setStyle(getPureCanvasGeoStyle());
+      mlMap.on('error', (ev) => {
+        const srcId = (ev as unknown as { sourceId?: string }).sourceId;
+        if (srcId === 'esri_light_gray' || srcId === 'esri_dark_gray') {
+          tileErrorCount += 1;
+          if (!switchedToFallback && tileErrorCount >= 3) {
+            switchedToFallback = true;
+            pureVectorFallbackRef.current = true;
+            mlMap.setStyle(getPureCanvasGeoStyle());
+          }
         }
       });
 
@@ -907,6 +941,8 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
     useEffect(() => {
       const mlMap = mlMapRef.current;
       if (!mlMap || !simDataRef.current.map.geoBounds) return;
+      if (prevMapStyleRef.current === openMapStyle) return;
+      prevMapStyleRef.current = openMapStyle;
       pureVectorFallbackRef.current = openMapStyle === 'canvas_vector';
       mlMap.setStyle(getStyleForMapMode(openMapStyle));
     }, [openMapStyle]);
@@ -915,15 +951,33 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
     useEffect(() => {
       const mlMap = mlMapRef.current;
       if (!mlMap || !simDataRef.current.map.geoBounds) return;
-      if (!mlMap.isStyleLoaded()) return;
       prevHoveredRegionRef.current = null;
-      syncMapLibreVectorLayers(
-        mlMap,
-        simDataRef.current.map,
-        openMapStyle,
-        pureVectorFallbackRef.current
-      );
-    }, [mapSeedKey, mapVersion, openMapStyle]);
+      if (mlMap.getSource('city-regions-geojson')) {
+        try {
+          syncMapLibreVectorLayers(
+            mlMap,
+            simDataRef.current.map,
+            uiRef.current.openMapStyle,
+            pureVectorFallbackRef.current
+          );
+          return;
+        } catch {
+          // fall through to style.load wait
+        }
+      }
+      const onStyleReady = () => {
+        syncMapLibreVectorLayers(
+          mlMap,
+          simDataRef.current.map,
+          uiRef.current.openMapStyle,
+          pureVectorFallbackRef.current
+        );
+      };
+      mlMap.once('style.load', onStyleReady);
+      return () => {
+        mlMap.off('style.load', onStyleReady);
+      };
+    }, [mapSeedKey, mapVersion]);
 
     // Sync 2D / 2.5D pitch & bearing
     useEffect(() => {
@@ -1649,7 +1703,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               if (!provUnlocked || !cityUnlocked) continue;
 
               const p = proj(d.x, d.y);
-              if (p.x < -260 || p.x > w + 260 || p.y < -260 || p.y > h + 260) continue;
+              if (!isSaneScreenPt(p) || p.x < -260 || p.x > w + 260 || p.y < -260 || p.y > h + 260) continue;
               ctx.save();
 
               if (d.unlocked) {
@@ -1703,7 +1757,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               if (c.unlocked) continue;
               if (!provUnlockedMap.get(c.provinceId)) continue;
               const p = proj(c.x, c.y);
-              if (p.x < -260 || p.x > w + 260 || p.y < -260 || p.y > h + 260) continue;
+              if (!isSaneScreenPt(p) || p.x < -260 || p.x > w + 260 || p.y < -260 || p.y > h + 260) continue;
 
               ctx.save();
               const prereq = getCityUnlockPrereq(st.map, c);
@@ -1725,7 +1779,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
             for (const prov of st.map.provinces ?? []) {
               if (prov.unlocked) continue;
               const p = proj(prov.x, prov.y);
-              if (p.x < -280 || p.x > w + 280 || p.y < -280 || p.y > h + 280) continue;
+              if (!isSaneScreenPt(p) || p.x < -280 || p.x > w + 280 || p.y < -280 || p.y > h + 280) continue;
 
               ctx.save();
               const unlockCost = getProvinceUnlockCost(prov, ui.difficulty);
@@ -1748,7 +1802,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
             if (st.map.pois && st.map.pois.length > 0 && zoomRatio > 0.5) {
               for (const poi of st.map.pois) {
                 const p = proj(poi.x, poi.y);
-                if (p.x < -50 || p.x > w + 50 || p.y < -50 || p.y > h + 50) continue;
+                if (!isSaneScreenPt(p) || p.x < -50 || p.x > w + 50 || p.y < -50 || p.y > h + 50) continue;
                 ctx.save();
                 ctx.translate(p.x, p.y);
                 const diamondColor =
@@ -1791,6 +1845,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
             if (st.layers.catchmentRings) {
               for (const station of st.stations) {
                 const p = proj(station.x, station.y);
+                if (!isSaneScreenPt(p)) continue;
                 const rPx = station.catchmentRadius * pxScale;
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, rPx, 0, Math.PI * 2);
