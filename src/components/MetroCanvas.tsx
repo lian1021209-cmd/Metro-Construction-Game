@@ -22,13 +22,18 @@ import {
   evalQuadraticBezier,
   findLockedDistrictAt,
   findNearestTrackSegment,
+  getCityUnlockCost,
+  getCityUnlockPrereq,
   getDistrictUnlockCost,
+  getDistrictUnlockPrereq,
+  getProvinceUnlockCost,
   getStationBuildCost,
   isWaterAt,
   pixelsToKm,
 } from '../engine/simulation';
 import {
   buildCityRiversGeoJson,
+  fetchLocalOverpassStreets,
   GeoBounds,
   getEsriDarkGrayStyle,
   getEsriLightGrayStyle,
@@ -38,6 +43,7 @@ import {
   normXToLon,
   normYToLat,
   OpenMapStyleId,
+  prefetchReverseGeocodePlace,
   riverPathToPolygonRing,
   worldToLatLon,
 } from '../engine/geo';
@@ -55,7 +61,10 @@ function getGeoFitBounds(geo: GeoBounds, map?: CityMap): [[number, number], [num
     let minLon = 180;
     let maxLon = -180;
     let hasPoly = false;
-    for (const d of map.districts) {
+    // Frame Shanghai municipal territory cleanly on startup & view reset
+    const shanghaiOrCore = map.districts.filter((d) => !d.provinceId || d.provinceId === 'prov_sh');
+    const targets = shanghaiOrCore.length > 0 ? shanghaiOrCore : map.districts;
+    for (const d of targets) {
       const rings = d.polygons ?? (d.polygon ? [d.polygon] : []);
       for (const ring of rings) {
         for (const pt of ring) {
@@ -117,6 +126,7 @@ interface MetroCanvasProps {
   onTrackSetWaypoint: (x: number, y: number) => void;
   onDemolishAt: (worldX: number, worldY: number) => void;
   onUnlockDistrict: (districtId: string) => void;
+  onUnlockRegion?: (kind: 'province' | 'city' | 'district', id: string) => void;
 }
 
 function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
@@ -508,6 +518,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       onTrackSetWaypoint,
       onDemolishAt,
       onUnlockDistrict,
+      onUnlockRegion,
     },
     ref
   ) => {
@@ -527,10 +538,12 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
     const hoveredStationRef = useRef<string | null>(null);
     const hoveredRoadRef = useRef<RoadSegment | null>(null);
     const lockedDistrictHitboxesRef = useRef<
-      { id: string; x1: number; y1: number; x2: number; y2: number }[]
+      { kind: 'province' | 'city' | 'district'; id: string; x1: number; y1: number; x2: number; y2: number }[]
     >([]);
     const hoveredDistrictRef = useRef<string | null>(null);
     const [isHoveringDistrict, setIsHoveringDistrict] = useState(false);
+    const hoverPrefetchTimerRef = useRef<number | null>(null);
+    const lastPrefetchKeyRef = useRef<string>('');
     const isPanningRef = useRef(false);
     const panStartRef = useRef({
       x: 0,
@@ -607,7 +620,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
           pitch: uiRef.current.is25D ? 44 : 0,
           bearing: uiRef.current.is25D ? -10 : 0,
         },
-        minZoom: 7.5,
+        minZoom: 5.0,
         maxZoom: 16.0,
         maxPitch: 60,
         interactive: false,
@@ -706,7 +719,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       zoomBy: (factor: number) => {
         const mlMap = mlMapRef.current;
         if (mlMap && simDataRef.current.map.geoBounds) {
-          const nextZ = Math.min(16.0, Math.max(7.5, mlMap.getZoom() + Math.log2(factor)));
+          const nextZ = Math.min(16.0, Math.max(5.0, mlMap.getZoom() + Math.log2(factor)));
           mlMap.easeTo({ zoom: nextZ, duration: 220 });
           return;
         }
@@ -881,12 +894,21 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               ctx.drawImage(baseMapCanvasRef.current, 0, 0);
               ctx.restore();
             } else if (isGeoActive && pureVectorFallbackRef.current) {
-              // Pure canvas land silhouette + GeoJSON river & lake polygons
+              // Pure canvas land silhouette + GeoJSON river & lake polygons (viewport culled)
               ctx.save();
               for (const d of st.map.districts) {
                 const rings = d.polygons ?? (d.polygon ? [d.polygon] : []);
                 for (const ring of rings) {
                   if (ring.length < 3) continue;
+                  let rMinX = Infinity, rMaxX = -Infinity, rMinY = Infinity, rMaxY = -Infinity;
+                  for (let i = 0; i < ring.length; i += Math.max(1, Math.floor(ring.length / 16))) {
+                    const pt = ring[i];
+                    if (pt.x < rMinX) rMinX = pt.x;
+                    if (pt.x > rMaxX) rMaxX = pt.x;
+                    if (pt.y < rMinY) rMinY = pt.y;
+                    if (pt.y > rMaxY) rMaxY = pt.y;
+                  }
+                  if (rMaxX < visMinX || rMinX > visMaxX || rMaxY < visMinY || rMinY > visMaxY) continue;
                   ctx.beginPath();
                   ring.forEach((pt, idx) => {
                     const sp = proj(pt.x, pt.y);
@@ -1019,7 +1041,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                 }
 
                 if (st.layers.populationHeatmap) {
-                  const density = Math.min(1, (cell.population + cell.jobs) / 900);
+                  const density = Math.min(1, (cell.population + cell.jobs) / 2400);
                   if (density > 0.2) {
                     const rgb = cell.jobs > cell.population ? '251, 146, 60' : '244, 63, 94';
                     const alpha = cell.jobs > cell.population ? density * 0.14 : density * 0.11;
@@ -1031,7 +1053,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                   const demandWeight = cell.population + cell.jobs;
                   if (cell.coveredByMetro) {
                     drawSoftGlow(p.x, p.y, cs * 1.2 * pxScale, 'rgba(16, 185, 129, 0.17)', 'rgba(16, 185, 129, 0)');
-                  } else if (demandWeight > 180) {
+                  } else if (demandWeight > 460) {
                     drawSoftGlow(p.x, p.y, cs * 1.2 * pxScale, 'rgba(244, 63, 94, 0.17)', 'rgba(244, 63, 94, 0)');
                   }
                 }
@@ -1188,8 +1210,9 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               ctx.restore();
             }
 
-            // 5. Administrative District Polygons (Darkened Locked Regions, Borders & Unlock Badges)
+            // 5. True 3-Tier Administrative Region Masking (Locked Province -> Locked City -> City Districts)
             const nextLockedHitboxes: {
+              kind: 'province' | 'city' | 'district';
               id: string;
               x1: number;
               y1: number;
@@ -1197,53 +1220,213 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               y2: number;
             }[] = [];
 
-            // 5A. Darken entire locked district polygons + draw district administrative boundaries
-            for (const d of st.map.districts) {
-              const rings = d.polygons ?? (d.polygon ? [d.polygon] : []);
-              if (rings.length === 0) continue;
+            const provUnlockedMap = new Map<string, boolean>(
+              (st.map.provinces ?? []).map((p) => [p.id, p.unlocked])
+            );
+            const cityUnlockedMap = new Map<string, boolean>(
+              (st.map.cities ?? []).map((c) => [c.id, c.unlocked])
+            );
 
-              const isHovered = hoveredDistrictRef.current === d.id;
-              ctx.save();
+            const ringsIntersectView = (rings: { x: number; y: number }[][]): boolean => {
+              let minX = Infinity;
+              let maxX = -Infinity;
+              let minY = Infinity;
+              let maxY = -Infinity;
+              for (const ring of rings) {
+                for (let i = 0; i < ring.length; i += Math.max(1, Math.floor(ring.length / 24))) {
+                  const pt = ring[i];
+                  if (pt.x < minX) minX = pt.x;
+                  if (pt.x > maxX) maxX = pt.x;
+                  if (pt.y < minY) minY = pt.y;
+                  if (pt.y > maxY) maxY = pt.y;
+                }
+              }
+              return !(maxX < visMinX || minX > visMaxX || maxY < visMinY || minY > visMaxY);
+            };
+
+            const traceWorldRings = (rings: { x: number; y: number }[][], stride = 1) => {
               ctx.beginPath();
               for (const ring of rings) {
                 if (ring.length < 3) continue;
-                for (let i = 0; i < ring.length; i++) {
+                for (let i = 0; i < ring.length; i += stride) {
                   const sp = proj(ring[i].x, ring[i].y);
                   if (i === 0) ctx.moveTo(sp.x, sp.y);
                   else ctx.lineTo(sp.x, sp.y);
                 }
                 ctx.closePath();
               }
+            };
 
-              if (!d.unlocked) {
-                ctx.fillStyle = isDarkMap
-                  ? isHovered
-                    ? 'rgba(18, 24, 34, 0.44)'
-                    : 'rgba(4, 7, 13, 0.62)'
-                  : isHovered
-                  ? 'rgba(15, 23, 42, 0.14)'
-                  : 'rgba(15, 23, 42, 0.24)';
-                ctx.fill();
-              }
+            const vertexStride = zoomRatio < 0.14 ? 3 : zoomRatio < 0.35 ? 2 : 1;
 
-              ctx.setLineDash(isHovered ? [] : [7, 5]);
-              ctx.strokeStyle = !d.unlocked
+            // Tier 1: Locked Provinces — draw ONLY outer provincial boundary with ZERO internal city/district lines
+            for (const prov of st.map.provinces ?? []) {
+              if (prov.unlocked) continue;
+              const rings = prov.polygons ?? [];
+              if (rings.length === 0 || !ringsIntersectView(rings)) continue;
+              const isHovered = hoveredDistrictRef.current === prov.id;
+
+              ctx.save();
+              traceWorldRings(rings, vertexStride);
+              ctx.fillStyle = isDarkMap
                 ? isHovered
-                  ? isDarkMap ? 'rgba(251, 191, 36, 0.78)' : '#D97706'
-                  : isDarkMap ? 'rgba(148, 163, 184, 0.24)' : 'rgba(15, 23, 42, 0.34)'
-                : d.isStarter
-                ? isDarkMap ? 'rgba(148, 163, 184, 0.26)' : 'rgba(15, 23, 42, 0.22)'
-                : isDarkMap ? 'rgba(56, 189, 248, 0.28)' : 'rgba(37, 99, 235, 0.34)';
-              ctx.lineWidth = isHovered ? 1.7 : 1.05;
+                  ? 'rgba(15, 23, 42, 0.56)'
+                  : 'rgba(3, 6, 12, 0.74)'
+                : isHovered
+                ? 'rgba(15, 23, 42, 0.22)'
+                : 'rgba(15, 23, 42, 0.32)';
+              ctx.fill();
+              ctx.setLineDash(isHovered ? [] : [9, 6]);
+              ctx.strokeStyle = isHovered
+                ? '#D97706'
+                : isDarkMap
+                ? 'rgba(148, 163, 184, 0.36)'
+                : 'rgba(15, 23, 42, 0.42)';
+              ctx.lineWidth = isHovered ? 2.2 : 1.5;
               ctx.stroke();
               ctx.setLineDash([]);
               ctx.restore();
             }
 
-            // 5B. District Labels, Starting Spawn Tags & Clickable Unlock Badges
+            // Tier 2: Unlocked Province + Locked Cities — draw ONLY outer city boundary with ZERO internal district lines
+            for (const city of st.map.cities ?? []) {
+              if (city.unlocked) continue;
+              if (!provUnlockedMap.get(city.provinceId)) continue;
+              const rings = city.polygons ?? [];
+              if (rings.length === 0 || !ringsIntersectView(rings)) continue;
+              const isHovered = hoveredDistrictRef.current === city.id;
+              const prereq = getCityUnlockPrereq(st.map, city);
+
+              ctx.save();
+              traceWorldRings(rings, vertexStride);
+              ctx.fillStyle = isDarkMap
+                ? isHovered
+                  ? 'rgba(18, 26, 40, 0.48)'
+                  : 'rgba(4, 8, 16, 0.62)'
+                : isHovered
+                ? 'rgba(15, 23, 42, 0.16)'
+                : prereq.canUnlock
+                ? 'rgba(15, 23, 42, 0.20)'
+                : 'rgba(15, 23, 42, 0.28)';
+              ctx.fill();
+              ctx.setLineDash(isHovered ? [] : [7, 5]);
+              ctx.strokeStyle = isHovered
+                ? '#D97706'
+                : prereq.canUnlock
+                ? isDarkMap
+                  ? 'rgba(251, 191, 36, 0.45)'
+                  : 'rgba(217, 119, 6, 0.55)'
+                : isDarkMap
+                ? 'rgba(148, 163, 184, 0.24)'
+                : 'rgba(15, 23, 42, 0.30)';
+              ctx.lineWidth = isHovered ? 2.0 : prereq.canUnlock ? 1.4 : 1.05;
+              ctx.stroke();
+              ctx.setLineDash([]);
+              ctx.restore();
+            }
+
+            // Tier 3: Shanghai & Districts inside Unlocked Cities — full survey-grade district boundaries
             for (const d of st.map.districts) {
+              const isShanghaiDist = !d.provinceId || d.provinceId === 'prov_sh';
+              const provUnlocked = isShanghaiDist || Boolean(provUnlockedMap.get(d.provinceId!));
+              const cityUnlocked = isShanghaiDist || !d.cityId || Boolean(cityUnlockedMap.get(d.cityId));
+              if (!provUnlocked || !cityUnlocked) continue;
+
+              const rings = d.polygons ?? (d.polygon ? [d.polygon] : []);
+              if (rings.length === 0 || !ringsIntersectView(rings)) continue;
+
+              const isHovered = hoveredDistrictRef.current === d.id;
+
+              ctx.save();
+              traceWorldRings(rings, 1);
+
+              if (!d.unlocked) {
+                ctx.fillStyle = isDarkMap
+                  ? isHovered
+                    ? 'rgba(18, 24, 34, 0.44)'
+                    : 'rgba(4, 7, 13, 0.56)'
+                  : isHovered
+                  ? 'rgba(15, 23, 42, 0.14)'
+                  : 'rgba(15, 23, 42, 0.20)';
+                ctx.fill();
+              }
+
+              ctx.setLineDash(isHovered ? [] : [6, 4]);
+              ctx.strokeStyle = !d.unlocked
+                ? isHovered
+                  ? isDarkMap ? 'rgba(251, 191, 36, 0.85)' : '#D97706'
+                  : isDarkMap ? 'rgba(148, 163, 184, 0.32)' : 'rgba(15, 23, 42, 0.34)'
+                : d.isStarter
+                ? isDarkMap ? 'rgba(148, 163, 184, 0.28)' : 'rgba(15, 23, 42, 0.24)'
+                : isDarkMap ? 'rgba(56, 189, 248, 0.36)' : 'rgba(37, 99, 235, 0.40)';
+              ctx.lineWidth = isHovered ? 1.8 : 1.1;
+              ctx.stroke();
+              ctx.setLineDash([]);
+              ctx.restore();
+            }
+
+            const drawLockBadge = (
+              kind: 'province' | 'city' | 'district',
+              id: string,
+              px: number,
+              py: number,
+              label: string,
+              opts: { ready: boolean; prominent?: boolean }
+            ) => {
+              const isHovered = hoveredDistrictRef.current === id;
+              const fontSize = opts.prominent ? 12 : zoomRatio < 0.52 ? 10 : 11;
+              ctx.font = `${opts.prominent ? '700' : '600'} ${fontSize}px "Noto Sans TC", sans-serif`;
+              const padX = opts.prominent ? 22 : zoomRatio < 0.52 ? 14 : 18;
+              const tw = ctx.measureText(label).width + padX;
+              const bh = opts.prominent ? 30 : zoomRatio < 0.52 ? 22 : 26;
+              const bx = px - tw / 2;
+              const by = py - bh / 2;
+              nextLockedHitboxes.push({ kind, id, x1: bx, y1: by, x2: bx + tw, y2: by + bh });
+
+              if (!opts.ready) {
+                ctx.fillStyle = isDarkMap ? 'rgba(15, 23, 42, 0.72)' : 'rgba(241, 245, 249, 0.88)';
+              } else if (opts.prominent) {
+                ctx.fillStyle = isDarkMap
+                  ? isHovered ? 'rgba(180, 83, 9, 0.96)' : 'rgba(15, 23, 42, 0.94)'
+                  : isHovered ? 'rgba(254, 243, 199, 0.99)' : 'rgba(255, 255, 255, 0.98)';
+              } else {
+                ctx.fillStyle = isDarkMap
+                  ? isHovered ? 'rgba(120, 53, 15, 0.92)' : 'rgba(9, 15, 26, 0.88)'
+                  : isHovered ? 'rgba(254, 243, 199, 0.98)' : 'rgba(255, 255, 255, 0.96)';
+              }
+              ctx.beginPath();
+              ctx.roundRect(bx, by, tw, bh, opts.prominent ? 8 : 6);
+              ctx.fill();
+
+              ctx.strokeStyle = !opts.ready
+                ? isDarkMap ? 'rgba(100, 116, 139, 0.35)' : 'rgba(148, 163, 184, 0.55)'
+                : opts.prominent
+                ? isHovered ? '#D97706' : '#0EA5E9'
+                : isDarkMap
+                ? isHovered ? 'rgba(251, 191, 36, 0.9)' : 'rgba(251, 191, 36, 0.36)'
+                : isHovered ? '#D97706' : 'rgba(148, 163, 184, 0.72)';
+              ctx.lineWidth = opts.prominent ? 1.6 : isHovered ? 1.4 : 1;
+              ctx.stroke();
+
+              ctx.fillStyle = !opts.ready
+                ? isDarkMap ? 'rgba(148, 163, 184, 0.85)' : '#64748B'
+                : isDarkMap
+                ? isHovered ? 'rgba(254, 243, 199, 0.98)' : 'rgba(226, 232, 240, 0.94)'
+                : isHovered ? '#92400E' : '#0F172A';
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(label, px, py);
+            };
+
+            // 5B. Unlocked District Labels & Progressive District Unlock Badges (only inside unlocked cities)
+            for (const d of st.map.districts) {
+              const isShanghaiDist = !d.provinceId || d.provinceId === 'prov_sh';
+              const provUnlocked = isShanghaiDist || Boolean(provUnlockedMap.get(d.provinceId!));
+              const cityUnlocked = isShanghaiDist || !d.cityId || Boolean(cityUnlockedMap.get(d.cityId));
+              if (!provUnlocked || !cityUnlocked) continue;
+
               const p = proj(d.x, d.y);
-              if (p.x < -220 || p.x > w + 220 || p.y < -220 || p.y > h + 220) continue;
+              if (p.x < -260 || p.x > w + 260 || p.y < -260 || p.y > h + 260) continue;
               ctx.save();
 
               if (d.unlocked) {
@@ -1266,41 +1449,76 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                   ctx.strokeText('開局出生點', p.x, p.y + 13);
                   ctx.fillStyle = isDarkMap ? 'rgba(110, 231, 183, 0.82)' : '#047857';
                   ctx.fillText('開局出生點', p.x, p.y + 13);
+                } else if (d.cityName && d.cityId !== 'city_sh' && zoomRatio >= 0.45) {
+                  const subTag = `${d.provinceName ?? ''} · ${d.cityName}`;
+                  ctx.font = '500 9.5px "Noto Sans TC", sans-serif';
+                  ctx.strokeStyle = isDarkMap ? 'rgba(6, 11, 20, 0.85)' : 'rgba(255, 255, 255, 0.94)';
+                  ctx.lineWidth = 2.6;
+                  ctx.strokeText(subTag, p.x, p.y + 13);
+                  ctx.fillStyle = isDarkMap ? 'rgba(148, 163, 184, 0.85)' : '#475569';
+                  ctx.fillText(subTag, p.x, p.y + 13);
                 }
               } else {
+                const prereq = getDistrictUnlockPrereq(st.map, d);
                 const unlockCost = getDistrictUnlockCost(d, ui.difficulty);
-                const label =
-                  zoomRatio < 0.52
-                    ? `🔒 ${d.name} · ${formatCurrencyWan(unlockCost, ui.lang)}`
-                    : `🔒 ${d.name} · ${formatCurrencyWan(unlockCost, ui.lang)} 解鎖`;
-                ctx.font = zoomRatio < 0.52 ? '500 10px "Noto Sans TC", sans-serif' : '500 11px "Noto Sans TC", sans-serif';
-                const tw = ctx.measureText(label).width + (zoomRatio < 0.52 ? 14 : 18);
-                const bh = zoomRatio < 0.52 ? 22 : 26;
-                const bx = p.x - tw / 2;
-                const by = p.y - bh / 2;
-                const isHovered = hoveredDistrictRef.current === d.id;
-                nextLockedHitboxes.push({ id: d.id, x1: bx, y1: by, x2: bx + tw, y2: by + bh });
-
-                ctx.fillStyle = isDarkMap
-                  ? isHovered ? 'rgba(120, 53, 15, 0.92)' : 'rgba(9, 15, 26, 0.88)'
-                  : isHovered ? 'rgba(254, 243, 199, 0.98)' : 'rgba(255, 255, 255, 0.96)';
-                ctx.beginPath();
-                ctx.roundRect(bx, by, tw, bh, 6);
-                ctx.fill();
-                ctx.strokeStyle = isDarkMap
-                  ? isHovered ? 'rgba(251, 191, 36, 0.9)' : 'rgba(251, 191, 36, 0.36)'
-                  : isHovered ? '#D97706' : 'rgba(148, 163, 184, 0.72)';
-                ctx.lineWidth = isHovered ? 1.4 : 1;
-                ctx.stroke();
-                ctx.fillStyle = isDarkMap
-                  ? isHovered ? 'rgba(254, 243, 199, 0.98)' : 'rgba(226, 232, 240, 0.9)'
-                  : isHovered ? '#92400E' : '#0F172A';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText(label, p.x, p.y);
+                if (prereq.canUnlock) {
+                  const label =
+                    zoomRatio < 0.52
+                      ? `🔒 ${d.name} · ${formatCurrencyWan(unlockCost, ui.lang)}`
+                      : `🔒 ${d.name} · ${formatCurrencyWan(unlockCost, ui.lang)} 解鎖`;
+                  drawLockBadge('district', d.id, p.x, p.y, label, { ready: true });
+                } else if (zoomRatio >= 0.44) {
+                  const label = `🔒 ${d.name}（需先解鎖${prereq.blockedByName ?? ''}）`;
+                  drawLockBadge('district', d.id, p.x, p.y, label, { ready: false });
+                }
               }
               ctx.restore();
             }
+
+            // 5C. Locked City Gateway Badges (inside Unlocked Provinces)
+            for (const c of st.map.cities ?? []) {
+              if (c.unlocked) continue;
+              if (!provUnlockedMap.get(c.provinceId)) continue;
+              const p = proj(c.x, c.y);
+              if (p.x < -260 || p.x > w + 260 || p.y < -260 || p.y > h + 260) continue;
+
+              ctx.save();
+              const prereq = getCityUnlockPrereq(st.map, c);
+              const unlockCost = getCityUnlockCost(c, ui.difficulty);
+              const closestDist = st.map.districts.find((d) => d.id === c.closestDistrictId);
+              if (prereq.canUnlock) {
+                const label = closestDist
+                  ? `🔒 ${c.name}（含${closestDist.name}）· ${formatCurrencyWan(unlockCost, ui.lang)}`
+                  : `🔒 ${c.name} · ${formatCurrencyWan(unlockCost, ui.lang)} 解鎖`;
+                drawLockBadge('city', c.id, p.x, p.y, label, { ready: true, prominent: true });
+              } else if (zoomRatio >= 0.14) {
+                const label = `🔒 ${c.name}（需先解鎖${prereq.blockedByName ?? ''}）`;
+                drawLockBadge('city', c.id, p.x, p.y, label, { ready: false });
+              }
+              ctx.restore();
+            }
+
+            // 5D. Locked Province Gateway Badges
+            for (const prov of st.map.provinces ?? []) {
+              if (prov.unlocked) continue;
+              const p = proj(prov.x, prov.y);
+              if (p.x < -280 || p.x > w + 280 || p.y < -280 || p.y > h + 280) continue;
+
+              ctx.save();
+              const unlockCost = getProvinceUnlockCost(prov, ui.difficulty);
+              const closestCity = st.map.cities?.find((c) => c.id === prov.closestCityId);
+              const closestDist = closestCity
+                ? st.map.districts.find((d) => d.id === closestCity.closestDistrictId)
+                : undefined;
+              const chainHint =
+                closestCity && closestDist
+                  ? `（解鎖含${closestCity.name}→${closestDist.name}）`
+                  : '';
+              const label = `🔒 ${prov.name}${chainHint} · ${formatCurrencyWan(unlockCost, ui.lang)}`;
+              drawLockBadge('province', prov.id, p.x, p.y, label, { ready: true, prominent: true });
+              ctx.restore();
+            }
+
             lockedDistrictHitboxesRef.current = nextLockedHitboxes;
 
             // 5.5 Real City POIs & Landmarks (◆ markers)
@@ -1895,7 +2113,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                 kmPerScreenPx = Math.max(0.0001, pixelsToKm(1, st.map) / cam.zoom);
               }
               const rawKm = 96 * kmPerScreenPx;
-              const niceStepsKm = [0.2, 0.5, 1, 2, 5, 10, 20];
+              const niceStepsKm = [0.2, 0.5, 1, 2, 5, 10, 20, 50, 100];
               let bestKm = 1;
               for (const sKm of niceStepsKm) {
                 if (sKm <= rawKm * 1.35) bestKm = sKm;
@@ -1933,7 +2151,9 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
 
       if (e.button !== 0) return;
 
-      let hitLockedBadge: { id: string; x1: number; y1: number; x2: number; y2: number } | undefined;
+      let hitLockedBadge:
+        | { kind: 'province' | 'city' | 'district'; id: string; x1: number; y1: number; x2: number; y2: number }
+        | undefined;
       for (let i = lockedDistrictHitboxesRef.current.length - 1; i >= 0; i--) {
         const b = lockedDistrictHitboxesRef.current[i];
         if (sx >= b.x1 && sx <= b.x2 && sy >= b.y1 && sy <= b.y2) {
@@ -1942,7 +2162,11 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
         }
       }
       if (hitLockedBadge && (tool === 'select' || tool === 'station' || tool === 'track')) {
-        onUnlockDistrict(hitLockedBadge.id);
+        if (onUnlockRegion) {
+          onUnlockRegion(hitLockedBadge.kind, hitLockedBadge.id);
+        } else if (hitLockedBadge.kind === 'district') {
+          onUnlockDistrict(hitLockedBadge.id);
+        }
         return;
       }
 
@@ -2084,6 +2308,32 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
         }
         return;
       }
+
+      // Debounced hover prefetch: automatically warms OSM local streets + Nominatim/Photon for unlocked land
+      const geo = simDataRef.current.map.geoBounds;
+      if (tool === 'station' && geo && !hitLockedBadge) {
+        const ll = worldToLatLon(wx, wy, geo, mapWidth, mapHeight);
+        const qKey = `${ll.lat.toFixed(3)}_${ll.lon.toFixed(3)}`;
+        if (qKey !== lastPrefetchKeyRef.current) {
+          lastPrefetchKeyRef.current = qKey;
+          if (hoverPrefetchTimerRef.current) {
+            window.clearTimeout(hoverPrefetchTimerRef.current);
+          }
+          hoverPrefetchTimerRef.current = window.setTimeout(() => {
+            const sim = simDataRef.current;
+            if (isWaterAt(sim.map, wx, wy).isWater || findLockedDistrictAt(sim.map, wx, wy)) return;
+            prefetchReverseGeocodePlace(ll.lat, ll.lon);
+            fetchLocalOverpassStreets(ll.lat, ll.lon, geo, mapWidth, mapHeight).then((extraRoads) => {
+              if (!extraRoads || extraRoads.length === 0 || simDataRef.current.map !== sim.map) return;
+              const existingIds = new Set(sim.map.roads.map((r) => r.id));
+              const newOnes = extraRoads.filter((r) => !existingIds.has(r.id));
+              if (newOnes.length > 0) {
+                sim.map.roads = [...sim.map.roads, ...newOnes];
+              }
+            });
+          }, 180);
+        }
+      }
     };
 
     const handlePointerUp = () => {
@@ -2101,7 +2351,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       const mlMap = mlMapRef.current;
       if (mlMap && simDataRef.current.map.geoBounds) {
         const around = mlMap.unproject([sx, sy]);
-        const nextZoom = Math.min(16.0, Math.max(7.5, mlMap.getZoom() + (e.deltaY < 0 ? 0.35 : -0.35)));
+        const nextZoom = Math.min(16.0, Math.max(5.0, mlMap.getZoom() + (e.deltaY < 0 ? 0.35 : -0.35)));
         mlMap.zoomTo(nextZoom, { around, duration: 0 });
         return;
       }

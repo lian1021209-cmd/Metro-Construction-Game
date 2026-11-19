@@ -1,9 +1,11 @@
 import {
   CityMap,
+  CityRegionInfo,
   DEPTH_LEVELS,
   DifficultyConfig,
   DistrictInfo,
   FarePolicy,
+  ProvinceRegionInfo,
   Station,
   StationSize,
   STATION_CONFIGS,
@@ -27,6 +29,147 @@ export function getDistrictUnlockCost(district: DistrictInfo, difficulty: Diffic
   return Math.max(5000, Math.round(district.unlockCostWan * difficulty.costMultiplier));
 }
 
+export function getProvinceUnlockCost(province: ProvinceRegionInfo, difficulty: DifficultyConfig): number {
+  if (province.unlocked) return 0;
+  return Math.max(10000, Math.round(province.unlockCostWan * difficulty.costMultiplier));
+}
+
+export function getCityUnlockCost(city: CityRegionInfo, difficulty: DifficultyConfig): number {
+  if (city.unlocked) return 0;
+  return Math.max(8000, Math.round(city.unlockCostWan * difficulty.costMultiplier));
+}
+
+export function getCityUnlockPrereq(
+  map: CityMap,
+  city: CityRegionInfo
+): { canUnlock: boolean; blockedByName?: string; blockedKind?: 'province' | 'city' } {
+  const prov = map.provinces?.find((p) => p.id === city.provinceId);
+  if (prov && !prov.unlocked) {
+    return { canUnlock: false, blockedByName: prov.name, blockedKind: 'province' };
+  }
+  if (city.isClosestToShanghai) {
+    return { canUnlock: true };
+  }
+  if (city.adjacentCityIds && city.adjacentCityIds.length > 0) {
+    const anyAdjUnlocked = city.adjacentCityIds.some(
+      (adjId) => map.cities?.find((c) => c.id === adjId)?.unlocked
+    );
+    if (anyAdjUnlocked) return { canUnlock: true };
+
+    // Recommend the closest adjacent city to Shanghai as the intuitive prerequisite
+    const adjCities = city.adjacentCityIds
+      .map((adjId) => map.cities?.find((c) => c.id === adjId))
+      .filter((c): c is CityRegionInfo => Boolean(c))
+      .sort((a, b) => a.distanceKmFromShanghai - b.distanceKmFromShanghai);
+    const hintName = adjCities[0]?.name ?? prov?.name;
+    return { canUnlock: false, blockedByName: hintName, blockedKind: 'city' };
+  }
+  if (city.prereqCityId) {
+    const prereqCity = map.cities?.find((c) => c.id === city.prereqCityId);
+    if (prereqCity && !prereqCity.unlocked) {
+      return { canUnlock: false, blockedByName: prereqCity.name, blockedKind: 'city' };
+    }
+  }
+  return { canUnlock: true };
+}
+
+export function getDistrictUnlockPrereq(
+  map: CityMap,
+  district: DistrictInfo
+): { canUnlock: boolean; blockedByName?: string; blockedKind?: 'province' | 'city' | 'district' } {
+  if (district.provinceId && district.provinceId !== 'prov_sh') {
+    const prov = map.provinces?.find((p) => p.id === district.provinceId);
+    if (prov && !prov.unlocked) {
+      return { canUnlock: false, blockedByName: prov.name, blockedKind: 'province' };
+    }
+  }
+  if (district.cityId && district.cityId !== 'city_sh') {
+    const city = map.cities?.find((c) => c.id === district.cityId);
+    if (city && !city.unlocked) {
+      return { canUnlock: false, blockedByName: city.name, blockedKind: 'city' };
+    }
+  }
+  if (district.isCityClosestToShanghai) {
+    return { canUnlock: true };
+  }
+  const prereqUnlocked = district.prereqDistrictId
+    ? Boolean(map.districts.find((d) => d.id === district.prereqDistrictId)?.unlocked)
+    : false;
+  if (prereqUnlocked) return { canUnlock: true };
+
+  if (district.adjacentDistrictIds && district.adjacentDistrictIds.length > 0) {
+    const anyAdjUnlocked = district.adjacentDistrictIds.some(
+      (adjId) => map.districts.find((d) => d.id === adjId)?.unlocked
+    );
+    if (anyAdjUnlocked) return { canUnlock: true };
+  }
+
+  if (district.prereqDistrictId) {
+    const prereqDist = map.districts.find((d) => d.id === district.prereqDistrictId);
+    if (prereqDist && !prereqDist.unlocked) {
+      return { canUnlock: false, blockedByName: prereqDist.name, blockedKind: 'district' };
+    }
+  }
+  if (district.adjacentDistrictIds && district.adjacentDistrictIds.length > 0) {
+    const firstAdj = map.districts.find((d) => d.id === district.adjacentDistrictIds![0]);
+    if (firstAdj && !firstAdj.unlocked) {
+      return { canUnlock: false, blockedByName: firstAdj.name, blockedKind: 'district' };
+    }
+  }
+  return { canUnlock: true };
+}
+
+export function unlockRegionCascade(
+  map: CityMap,
+  kind: 'province' | 'city' | 'district',
+  id: string
+): {
+  unlockedProvinces: ProvinceRegionInfo[];
+  unlockedCities: CityRegionInfo[];
+  unlockedDistricts: DistrictInfo[];
+} {
+  const unlockedProvinces: ProvinceRegionInfo[] = [];
+  const unlockedCities: CityRegionInfo[] = [];
+  const unlockedDistricts: DistrictInfo[] = [];
+
+  if (kind === 'province') {
+    const prov = map.provinces?.find((p) => p.id === id);
+    if (prov && !prov.unlocked) {
+      prov.unlocked = true;
+      unlockedProvinces.push(prov);
+      const closestCity = map.cities?.find((c) => c.id === prov.closestCityId);
+      if (closestCity && !closestCity.unlocked) {
+        closestCity.unlocked = true;
+        unlockedCities.push(closestCity);
+        const closestDist = map.districts.find((d) => d.id === closestCity.closestDistrictId);
+        if (closestDist && !closestDist.unlocked) {
+          closestDist.unlocked = true;
+          unlockedDistricts.push(closestDist);
+        }
+      }
+    }
+  } else if (kind === 'city') {
+    const city = map.cities?.find((c) => c.id === id);
+    if (city && !city.unlocked) {
+      city.unlocked = true;
+      unlockedCities.push(city);
+      const closestDist = map.districts.find((d) => d.id === city.closestDistrictId);
+      if (closestDist && !closestDist.unlocked) {
+        closestDist.unlocked = true;
+        unlockedDistricts.push(closestDist);
+      }
+    }
+  } else {
+    const dist = map.districts.find((d) => d.id === id);
+    if (dist && !dist.unlocked) {
+      dist.unlocked = true;
+      unlockedDistricts.push(dist);
+    }
+  }
+
+  return { unlockedProvinces, unlockedCities, unlockedDistricts };
+}
+
 function pointInPolygon(px: number, py: number, poly: { x: number; y: number }[]): boolean {
   let inside = false;
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
@@ -41,11 +184,59 @@ function pointInPolygon(px: number, py: number, poly: { x: number; y: number }[]
   return inside;
 }
 
+interface RingBox {
+  ring: { x: number; y: number }[];
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+}
+
+const districtBboxCache = new WeakMap<
+  DistrictInfo,
+  { minX: number; maxX: number; minY: number; maxY: number; rings: RingBox[] }
+>();
+
+function getDistrictBbox(d: DistrictInfo) {
+  let cached = districtBboxCache.get(d);
+  if (cached) return cached;
+  const rawRings = d.polygons ?? (d.polygon ? [d.polygon] : []);
+  const rings: RingBox[] = [];
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const ring of rawRings) {
+    if (ring.length < 3) continue;
+    let rMinX = Infinity;
+    let rMaxX = -Infinity;
+    let rMinY = Infinity;
+    let rMaxY = -Infinity;
+    for (const p of ring) {
+      if (p.x < rMinX) rMinX = p.x;
+      if (p.x > rMaxX) rMaxX = p.x;
+      if (p.y < rMinY) rMinY = p.y;
+      if (p.y > rMaxY) rMaxY = p.y;
+    }
+    if (rMinX < minX) minX = rMinX;
+    if (rMaxX > maxX) maxX = rMaxX;
+    if (rMinY < minY) minY = rMinY;
+    if (rMaxY > maxY) maxY = rMaxY;
+    rings.push({ ring, minX: rMinX, maxX: rMaxX, minY: rMinY, maxY: rMaxY });
+  }
+  cached = { minX, maxX, minY, maxY, rings };
+  districtBboxCache.set(d, cached);
+  return cached;
+}
+
 export function pointInDistrict(d: DistrictInfo, wx: number, wy: number): boolean {
-  const rings = d.polygons ?? (d.polygon ? [d.polygon] : null);
-  if (rings && rings.length > 0) {
-    for (const r of rings) {
-      if (r.length >= 3 && pointInPolygon(wx, wy, r)) return true;
+  const bb = getDistrictBbox(d);
+  if (bb.rings.length > 0) {
+    if (wx < bb.minX || wx > bb.maxX || wy < bb.minY || wy > bb.maxY) return false;
+    for (const rb of bb.rings) {
+      if (wx >= rb.minX && wx <= rb.maxX && wy >= rb.minY && wy <= rb.maxY && pointInPolygon(wx, wy, rb.ring)) {
+        return true;
+      }
     }
     return false;
   }
@@ -97,7 +288,7 @@ export function isWaterAt(
     }
   }
 
-  // 2. Inland lake polygons (e.g. Dianshan Lake)
+  // 2. Inland lake polygons (Dianshan Lake, Dishui Lake, Taihu Lake, Hongze, Gaoyou, Qiandao)
   if (map.waterPolygons) {
     for (const lake of map.waterPolygons) {
       if (lake.points.length >= 3 && pointInPolygon(wx, wy, lake.points)) {
@@ -106,7 +297,7 @@ export function isWaterAt(
     }
   }
 
-  // 3. Major rivers & creeks (e.g. Suzhou Creek; Huangpu River uses exact riverbank polygon in waterPolygons)
+  // 3. Major rivers & creeks (Suzhou Creek, Qiantang River, Yangtze River)
   for (const rv of map.rivers) {
     if (rv.skipPolylineWaterCheck) continue;
     if (rv.points.length >= 2 && distToPolylineWorld(wx, wy, rv.points) <= rv.width * 0.5) {
@@ -361,8 +552,8 @@ export function stepSimulation(
       let localPop = 0;
       let localJobs = 0;
 
-      for (let dy = -3; dy <= 3; dy++) {
-        for (let dx = -3; dx <= 3; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
           const cx = gx + dx;
           const cy = gy + dy;
           if (cx >= 0 && cx < map.cols && cy >= 0 && cy < map.rows) {
@@ -373,15 +564,15 @@ export function stepSimulation(
         }
       }
 
-      if (localPop > 120) residentialStations.push(st);
-      if (localJobs > 120) jobStations.push(st);
+      if (localPop > 320) residentialStations.push(st);
+      if (localJobs > 320) jobStations.push(st);
 
       const intensity =
         demandInfo.flowBias === 'to_work'
-          ? localPop * 0.00055 + localJobs * 0.0001
+          ? localPop * 0.00048 + localJobs * 0.0001
           : demandInfo.flowBias === 'to_home'
-          ? localJobs * 0.00055 + localPop * 0.0001
-          : (localPop + localJobs) * 0.00024;
+          ? localJobs * 0.00048 + localPop * 0.0001
+          : (localPop + localJobs) * 0.00022;
 
       const expectedNew = intensity * demandInfo.multiplier * dtSimMinutes;
       const count = Math.floor(expectedNew) + (Math.random() < expectedNew % 1 ? 1 : 0);
@@ -405,8 +596,8 @@ export function stepSimulation(
         const estFare = computeProgressiveFare(distKm, farePolicy);
         const farePenalty = Math.max(0, (estFare - 3) * 0.08);
         if (
-          (route.totalCost > 26 * difficulty.passengerTolerance || farePenalty > 0.25) &&
-          Math.random() < (0.3 + farePenalty) * difficulty.roadCompetition
+          (route.totalCost > 48 * difficulty.passengerTolerance || farePenalty > 0.35) &&
+          Math.random() < (0.28 + farePenalty) * difficulty.roadCompetition
         ) {
           continue;
         }

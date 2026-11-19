@@ -266,6 +266,77 @@ export class TransitRouter {
   }
 }
 
+const cellDistrictIndexCache = new WeakMap<CityMap, Int16Array>();
+
+function pointInRingFast(px: number, py: number, ring: { x: number; y: number }[]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i].x;
+    const yi = ring[i].y;
+    const xj = ring[j].x;
+    const yj = ring[j].y;
+    const intersect =
+      yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi + 1e-12) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function getCellDistrictIndices(map: CityMap): Int16Array {
+  const cached = cellDistrictIndexCache.get(map);
+  if (cached) return cached;
+
+  const bboxes = map.districts.map((d) => {
+    const rings = (d.polygons ?? (d.polygon ? [d.polygon] : [])).filter((r) => r.length >= 3);
+    const ringData = rings.map((r) => {
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minY = Infinity;
+      let maxY = -Infinity;
+      for (const p of r) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
+      return { r, minX, maxX, minY, maxY };
+    });
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const rd of ringData) {
+      if (rd.minX < minX) minX = rd.minX;
+      if (rd.maxX > maxX) maxX = rd.maxX;
+      if (rd.minY < minY) minY = rd.minY;
+      if (rd.maxY > maxY) maxY = rd.maxY;
+    }
+    return { ringData, minX, maxX, minY, maxY };
+  });
+
+  const arr = new Int16Array(map.cells.length);
+  for (let i = 0; i < map.cells.length; i++) {
+    const cell = map.cells[i];
+    const cx = (cell.gx + 0.5) * map.cellSize;
+    const cy = (cell.gy + 0.5) * map.cellSize;
+    let found = -1;
+    for (let dIdx = 0; dIdx < bboxes.length; dIdx++) {
+      const db = bboxes[dIdx];
+      if (cx < db.minX || cx > db.maxX || cy < db.minY || cy > db.maxY) continue;
+      for (const rd of db.ringData) {
+        if (cx >= rd.minX && cx <= rd.maxX && cy >= rd.minY && cy <= rd.maxY && pointInRingFast(cx, cy, rd.r)) {
+          found = dIdx;
+          break;
+        }
+      }
+      if (found !== -1) break;
+    }
+    arr[i] = found;
+  }
+  cellDistrictIndexCache.set(map, arr);
+  return arr;
+}
+
 export function recomputeMapCoverage(map: CityMap, stations: Station[]): {
   coveragePercent: number;
   totalPopulation: number;
@@ -279,29 +350,52 @@ export function recomputeMapCoverage(map: CityMap, stations: Station[]): {
   let congestionSum = 0;
   let landCells = 0;
 
-  for (const cell of map.cells) {
-    const cx = (cell.gx + 0.5) * map.cellSize;
-    const cy = (cell.gy + 0.5) * map.cellSize;
-    let covered = false;
+  const districtIndices = map.districts.length > 0 ? getCellDistrictIndices(map) : null;
 
-    for (const st of stations) {
-      const dist = Math.hypot(cx - st.x, cy - st.y);
-      if (dist <= st.catchmentRadius) {
-        covered = true;
-        break;
+  for (let i = 0; i < map.cells.length; i++) {
+    map.cells[i].coveredByMetro = false;
+  }
+
+  const cs = map.cellSize;
+  for (const st of stations) {
+    const r = st.catchmentRadius;
+    const rSq = r * r;
+    const minGx = Math.max(0, Math.floor((st.x - r) / cs));
+    const maxGx = Math.min(map.cols - 1, Math.floor((st.x + r) / cs));
+    const minGy = Math.max(0, Math.floor((st.y - r) / cs));
+    const maxGy = Math.min(map.rows - 1, Math.floor((st.y + r) / cs));
+
+    for (let gy = minGy; gy <= maxGy; gy++) {
+      const cy = (gy + 0.5) * cs;
+      const dy = cy - st.y;
+      const rowOffset = gy * map.cols;
+      for (let gx = minGx; gx <= maxGx; gx++) {
+        const cx = (gx + 0.5) * cs;
+        const dx = cx - st.x;
+        if (dx * dx + dy * dy <= rSq) {
+          const cell = map.cells[rowOffset + gx];
+          if (cell) cell.coveredByMetro = true;
+        }
       }
     }
-    cell.coveredByMetro = covered;
+  }
 
-    const w = cell.population + cell.jobs;
-    totalPop += cell.population;
-    totalJobs += cell.jobs;
-    totalWeight += w;
-    if (covered) coveredWeight += w;
+  for (let i = 0; i < map.cells.length; i++) {
+    const cell = map.cells[i];
+    const dIdx = districtIndices ? districtIndices[i] : -1;
+    const isRegionUnlocked = dIdx === -1 ? true : Boolean(map.districts[dIdx]?.unlocked);
 
-    if (cell.terrain !== 'water') {
-      landCells++;
-      congestionSum += cell.roadCongestion;
+    if (isRegionUnlocked) {
+      const w = cell.population + cell.jobs;
+      totalPop += cell.population;
+      totalJobs += cell.jobs;
+      totalWeight += w;
+      if (cell.coveredByMetro) coveredWeight += w;
+
+      if (cell.terrain !== 'water') {
+        landCells++;
+        congestionSum += cell.roadCongestion;
+      }
     }
   }
 

@@ -246,6 +246,28 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
         list.push({ id: `p_${p.id}`, label: p.name, kind: 'POI', x: p.x, y: p.y });
       }
     }
+    for (const prov of map.provinces ?? []) {
+      if (!q || prov.name.toLowerCase().includes(q)) {
+        list.push({
+          id: `prov_${prov.id}`,
+          label: prov.name,
+          kind: prov.unlocked ? '已解鎖省份' : '跨省門戶',
+          x: prov.x,
+          y: prov.y,
+        });
+      }
+    }
+    for (const c of map.cities ?? []) {
+      if (!q || c.name.toLowerCase().includes(q)) {
+        list.push({
+          id: `city_${c.id}`,
+          label: c.name,
+          kind: c.unlocked ? '已解鎖城市' : `地級市 (${c.distanceKmFromShanghai}km)`,
+          x: c.x,
+          y: c.y,
+        });
+      }
+    }
     for (const d of map.districts) {
       if (!q || d.name.toLowerCase().includes(q)) {
         const kindLabel = d.isStarter
@@ -255,13 +277,15 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
           : d.unlocked
           ? lang === 'en'
             ? 'Unlocked'
+            : d.cityName && d.cityId !== 'city_sh'
+            ? `${d.cityName} · 已解鎖`
             : '已解鎖地區'
-          : `${formatCurrencyWan(getDistrictUnlockCost(d, difficulty), lang)}`;
+          : `${d.cityName && d.cityId !== 'city_sh' ? `${d.cityName} · ` : ''}${formatCurrencyWan(getDistrictUnlockCost(d, difficulty), lang)}`;
         list.push({ id: `d_${d.id}`, label: d.name, kind: kindLabel, x: d.x, y: d.y });
       }
     }
-    return list.slice(0, 10);
-  }, [searchQuery, stations, map.pois, map.districts, difficulty, lang]);
+    return list.slice(0, 12);
+  }, [searchQuery, stations, map.pois, map.provinces, map.cities, map.districts, difficulty, lang]);
 
   const toggleDrawer = (target: 'view' | 'search' | 'menu') => {
     setActiveKpi('none');

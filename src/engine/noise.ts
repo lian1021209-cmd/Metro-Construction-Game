@@ -3,9 +3,11 @@ import {
   CityCell,
   CityMap,
   CityPoi,
+  CityRegionInfo,
   DistrictInfo,
   HillContour,
   MapMode,
+  ProvinceRegionInfo,
   RealCityId,
   RiverPath,
   Station,
@@ -15,9 +17,11 @@ import {
 import {
   createGeoBounds,
   GeoBounds,
+  getCachedReverseGeocodePlace,
   latLonToWorld,
   ReverseGeocodePlace,
   toTraditionalPlaceName,
+  worldToLatLon,
 } from './geo';
 import {
   SHANGHAI_DIANSHAN_LAKE_WGS84,
@@ -28,6 +32,20 @@ import {
   SHANGHAI_SUZHOU_WGS84,
 } from './shanghaiGeoData';
 import { SHANGHAI_PLACES_WGS84 } from './shanghaiPlaces';
+import {
+  GAOYOU_LAKE_POLY_WGS84,
+  HONGZE_LAKE_POLY_WGS84,
+  NEIGHBOR_CITIES_WGS84,
+  NEIGHBOR_DISTRICTS_WGS84,
+  NEIGHBOR_PLACES_WGS84,
+  NEIGHBOR_POIS_WGS84,
+  NEIGHBOR_PROVINCES_WGS84,
+  NEIGHBOR_URBAN_CENTERS_WGS84,
+  QIANDAO_LAKE_POLY_WGS84,
+  QIANTANG_RIVER_WGS84,
+  TAIHU_LAKE_POLY_WGS84,
+  YANGTZE_RIVER_WGS84,
+} from './neighborGeoData';
 
 function hash2D(ix: number, iy: number, seed: number): number {
   let n = ix * 374761393 + iy * 668265263 + seed * 1442695041;
@@ -83,7 +101,8 @@ function getProjectedShanghaiPlaces(map: CityMap): ProjectedShanghaiPlace[] {
   if (!geo) return [];
   const cached = projectedPlacesCache.get(geo);
   if (cached) return cached;
-  const projected = SHANGHAI_PLACES_WGS84.map((p) => {
+  const allPlaces = [...SHANGHAI_PLACES_WGS84, ...NEIGHBOR_PLACES_WGS84];
+  const projected = allPlaces.map((p) => {
     const pt = latLonToWorld(p.lat, p.lon, geo, map.width, map.height);
     return { name: p.name, x: pt.x, y: pt.y, kind: p.kind };
   });
@@ -154,17 +173,38 @@ function cleanPlaceLabel(raw: string): string {
 function findDistrictAt(map: CityMap, wx: number, wy: number): DistrictInfo | null {
   for (const d of map.districts) {
     const rings = d.polygons ?? (d.polygon ? [d.polygon] : []);
-    if (rings.some((ring) => isPointInRing(wx, wy, ring))) {
-      return d;
+    for (const ring of rings) {
+      if (ring.length < 3) continue;
+      let minX = Infinity;
+      let maxX = -Infinity;
+      let minY = Infinity;
+      let maxY = -Infinity;
+      for (const p of ring) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
+      if (wx >= minX && wx <= maxX && wy >= minY && wy <= maxY && isPointInRing(wx, wy, ring)) {
+        return d;
+      }
     }
   }
   return null;
 }
 
 function shortDistrictName(name: string): string {
-  if (name.endsWith('新區') && name.length > 2) return name.slice(0, -2);
-  if (name.endsWith('區') && name.length > 2) return name.slice(0, -1);
-  return name;
+  const firstPart = name.split('·')[0].trim();
+  if (firstPart.endsWith('工業園區')) return '蘇州園區';
+  if (firstPart.endsWith('經開區')) return firstPart.slice(0, -3);
+  if (firstPart.endsWith('新區') && firstPart.length > 2) return firstPart.slice(0, -2);
+  if (
+    (firstPart.endsWith('區') || firstPart.endsWith('縣') || firstPart.endsWith('市')) &&
+    firstPart.length > 2
+  ) {
+    return firstPart.slice(0, -1);
+  }
+  return firstPart;
 }
 
 function findNearestRoads(
@@ -267,7 +307,17 @@ export function suggestStationName(
   wy: number,
   existingStations: Station[] = []
 ): string {
-  // World scale ~50 m/px: 4 px ≈ 200 m, 10 px ≈ 500 m
+  // 0. Check synchronous reverse-geocode cache first (populated by hover prefetch or prior calls)
+  if (map.geoBounds) {
+    const ll = worldToLatLon(wx, wy, map.geoBounds, map.width, map.height);
+    const cachedGeo = getCachedReverseGeocodePlace(ll.lat, ll.lon);
+    if (cachedGeo) {
+      const geoResolved = resolveNominatimStationName(cachedGeo, map, wx, wy, existingStations);
+      if (geoResolved) return geoResolved;
+    }
+  }
+
+  // World scale ~49.5 m/px: 4.2 px ≈ 210 m, 8.5 px ≈ 420 m, 10 px ≈ 500 m
   const places = getProjectedShanghaiPlaces(map);
   const nearestPois = map.pois
     .map((p) => ({ name: cleanPlaceLabel(p.name), dist: Math.hypot(wx - p.x, wy - p.y) }))
@@ -279,12 +329,14 @@ export function suggestStationName(
 
   const nearestLandmarkPlace = nearestPlaces.find((p) => p.kind === 'landmark');
   const nearestSubPlace = nearestPlaces.find((p) => p.kind !== 'landmark') ?? nearestPlaces[0];
-  const nearbyRoads = findNearestRoads(map, wx, wy, 10);
+  const nearbyRoads = findNearestRoads(map, wx, wy, 12);
   const containingDist = findDistrictAt(map, wx, wy);
 
   const hints: string[] = [];
-  for (const r of nearbyRoads.slice(1, 3)) hints.push(r.name);
-  if (nearestSubPlace && nearestSubPlace.dist < 32) hints.push(nearestSubPlace.name);
+  for (const r of nearbyRoads.slice(1, 4)) hints.push(r.name);
+  for (const np of nearestPlaces.slice(0, 3)) {
+    if (np.dist < 42) hints.push(np.name);
+  }
   if (containingDist) hints.push(shortDistrictName(containingDist.name));
 
   let primaryCandidate: string | null = null;
@@ -338,14 +390,17 @@ export function suggestStationName(
     primaryCandidate = nearestPlaces[0].name;
   }
 
-  // Tier 4: Containing administrative district + compass quadrant if far from district center
+  // Tier 4: Containing administrative district + compass quadrant (triggered at >400m from center so 500m moves differ)
   if (!primaryCandidate && containingDist) {
     const shortName = shortDistrictName(containingDist.name);
     const distFromCenter = Math.hypot(wx - containingDist.x, wy - containingDist.y);
-    primaryCandidate =
-      distFromCenter > 36
-        ? `${shortName}${compassDirection(wx - containingDist.x, wy - containingDist.y)}`
-        : shortName;
+    if (distFromCenter > 8.5) {
+      const comp = compassDirection(wx - containingDist.x, wy - containingDist.y);
+      const outerTag = distFromCenter > 45 ? '新城' : '';
+      primaryCandidate = `${shortName}${comp}${outerTag}`;
+    } else {
+      primaryCandidate = shortName;
+    }
   }
 
   // Tier 5: Nearest district fallback (should only happen on narrow coastal edge)
@@ -464,75 +519,64 @@ function isPointInRing(px: number, py: number, ring: { x: number; y: number }[])
   return inside;
 }
 
-function getDistrictAngle(
-  wx: number,
-  wy: number,
-  w: number,
-  h: number,
-  centers: { x: number; y: number; radius: number; type: 'cbd' | 'res' | 'ind' }[],
-  seed: number
-): number {
-  let bestDist = Infinity;
-  let bestAngle = 0;
-  centers.forEach((c, idx) => {
-    const d = Math.hypot(wx - c.x * w, wy - c.y * h);
-    if (d < bestDist) {
-      bestDist = d;
-      bestAngle = (hash2D(idx, 77, seed) - 0.5) * 0.62;
-    }
-  });
-  return bestAngle;
-}
 
 export function generateBuildingsFromCells(
-  cols: number,
-  rows: number,
+  _cols: number,
+  _rows: number,
   cellSize: number,
   cells: CityCell[],
   seed: number,
-  centers: { x: number; y: number; radius: number; type: 'cbd' | 'res' | 'ind' }[] = []
+  _centers: { x: number; y: number; radius: number; type: 'cbd' | 'res' | 'ind' }[] = []
 ): BuildingModel[] {
-  const wTotal = cols * cellSize;
-  const hTotal = rows * cellSize;
   const buildings: BuildingModel[] = [];
   let bIdx = 0;
 
-  for (const cell of cells) {
-    if (cell.terrain !== 'land') continue;
-    const density = cell.population + cell.jobs;
-    if (density < 180 || cell.zone === 'park') continue;
+  // Pick dense urban cells first so megaregion rendering remains crisp at 60 FPS across all 201 districts
+  const denseCells = cells
+    .filter((c) => c.terrain === 'land' && c.zone !== 'park' && c.population + c.jobs >= 520)
+    .sort((a, b) => b.population + b.jobs - (a.population + a.jobs));
 
-    const count = density > 720 ? 2 : 1;
+  const MAX_BUILDINGS = 6500;
+
+  for (const cell of denseCells) {
+    if (buildings.length >= MAX_BUILDINGS) break;
+    const density = cell.population + cell.jobs;
+    const count = density > 2100 ? 4 : density > 1400 ? 3 : density > 850 ? 2 : 1;
     const baseX = cell.gx * cellSize;
     const baseY = cell.gy * cellSize;
-    const angle = getDistrictAngle(baseX + cellSize * 0.5, baseY + cellSize * 0.5, wTotal, hTotal, centers, seed);
+    const angle = (hash2D(cell.gx >> 2, cell.gy >> 2, seed + 17) - 0.5) * 0.45;
 
     for (let k = 0; k < count; k++) {
-      const r1 = hash2D(cell.gx * 7 + k, cell.gy * 11, seed + 41);
-      const r2 = hash2D(cell.gx * 13, cell.gy * 5 + k, seed + 73);
+      if (buildings.length >= MAX_BUILDINGS) break;
+      const r1 = hash2D(cell.gx * 7 + k * 3, cell.gy * 11 + k, seed + 41);
+      const r2 = hash2D(cell.gx * 13 + k, cell.gy * 5 + k * 7, seed + 73);
       const r3 = hash2D(cell.gx + k * 3, cell.gy + k * 5, seed + 109);
 
-      if (count === 1 && r1 < 0.48) continue;
+      if (count === 1 && density < 720 && r1 < 0.35) continue;
 
       let kind: BuildingModel['kind'] = 'res';
-      let w = 10 + r1 * 8;
-      let d = 9 + r2 * 8;
-      let h = 10 + (density / 1000) * 26 + r3 * 10;
+      let w = 8 + r1 * 6;
+      let d = 7 + r2 * 6;
+      let h = 10 + (density / 2600) * 24 + r3 * 10;
 
       if (cell.zone === 'commercial') {
-        kind = density > 820 && r3 > 0.85 ? 'landmark' : 'cbd';
-        w = kind === 'landmark' ? 16 : 11 + r1 * 9;
-        d = kind === 'landmark' ? 15 : 10 + r2 * 8;
-        h = kind === 'landmark' ? 66 + r3 * 36 : 24 + (density / 1000) * 50 + r3 * 16;
+        kind = density > 2100 && r3 > 0.84 ? 'landmark' : 'cbd';
+        w = kind === 'landmark' ? 14 : 9 + r1 * 7;
+        d = kind === 'landmark' ? 13 : 8 + r2 * 7;
+        h = kind === 'landmark' ? 68 + r3 * 36 : 24 + (density / 2600) * 48 + r3 * 16;
       } else if (cell.zone === 'industrial') {
         kind = 'ind';
-        w = 17 + r1 * 9;
-        d = 13 + r2 * 8;
+        w = 14 + r1 * 8;
+        d = 11 + r2 * 7;
         h = 7 + r3 * 8;
       }
 
-      const ox = baseX + 5 + r1 * Math.max(2, cellSize - w - 10);
-      const oy = baseY + 5 + r2 * Math.max(2, cellSize - d - 10);
+      // Spread multiple buildings cleanly inside the 64x64px block
+      const slotX = k % 2;
+      const slotY = Math.floor(k / 2) % 2;
+      const cellHalf = cellSize * 0.5;
+      const ox = baseX + slotX * (cellHalf - 4) + 4 + r1 * Math.max(2, cellHalf - w - 6);
+      const oy = baseY + slotY * (cellHalf - 4) + 4 + r2 * Math.max(2, cellHalf - d - 6);
 
       buildings.push({
         id: `bld_${bIdx++}`,
@@ -557,28 +601,29 @@ export function generateCityMap(
   seed: number,
   _realCityId: RealCityId = 'shanghai'
 ): CityMap {
-  // 90x90 grid at 40px = 3600x3600 world covering all 16 official districts of Shanghai
-  // from Jinshan (30.678°N) to Chongming (31.875°N) and Qingpu (120.85°E) to Hengsha/East China Sea (122.24°E)
-  const cols = 90;
-  const rows = 90;
-  const cellSize = 40;
-  const w = cols * cellSize; // 3600
-  const h = rows * cellSize; // 3600
+  // 212x312 grid at 64px = 13568x19968 world covering all of Shanghai (16 districts),
+  // ALL 13 cities / 95 districts of Jiangsu, and ALL 11 cities / 90 districts of Zhejiang
+  // at Shanghai's 1:11.4 zoom scale (~49.5 m/px).
+  const cols = 212;
+  const rows = 312;
+  const cellSize = 64;
+  const w = cols * cellSize; // 13568
+  const h = rows * cellSize; // 19968
   const cells: CityCell[] = [];
   const hills: HillContour[] = [];
   const pois: CityPoi[] = [];
 
-  const mapName = '上海全市 · 1990年';
-  const subtitle = '黃浦江 / 蘇州河 / 長江口 · 16個行政區全精度實景';
+  const mapName = '上海及江浙跨省都市圈 · 1990年';
+  const subtitle = '黃浦江 / 太湖 / 錢塘江 / 長江 · 上海市16區 + 江蘇13市·浙江11市（185縣區）層級解鎖';
   const startYear = 1990;
-  const geoBounds: GeoBounds = createGeoBounds(31.275, 121.545, 11.4, w, h);
+  const geoBounds: GeoBounds = createGeoBounds(31.10, 119.65, 11.4, w, h);
 
   const toWorld = (lat: number, lon: number) => latLonToWorld(lat, lon, geoBounds, w, h);
 
-  const centers: { x: number; y: number; radius: number; type: 'cbd' | 'res' | 'ind' }[] = [];
-  const addGeoCenter = (lat: number, lon: number, radiusNorm: number, type: 'cbd' | 'res' | 'ind') => {
+  const worldCenters: { wx: number; wy: number; radiusPx: number; type: 'cbd' | 'res' | 'ind' }[] = [];
+  const addGeoCenterPx = (lat: number, lon: number, radiusPx: number, type: 'cbd' | 'res' | 'ind') => {
     const p = toWorld(lat, lon);
-    centers.push({ x: p.x / w, y: p.y / h, radius: radiusNorm, type });
+    worldCenters.push({ wx: p.x, wy: p.y, radiusPx, type });
   };
 
   const addGeoPoi = (id: string, name: string, kind: CityPoi['kind'], lat: number, lon: number) => {
@@ -586,8 +631,48 @@ export function generateCityMap(
     pois.push({ id, name, kind, x: Math.round(p.x), y: Math.round(p.y) });
   };
 
-  // 1. Survey-grade real administrative boundaries for all 16 official districts of Shanghai (WGS-84)
-  const districts: DistrictInfo[] = SHANGHAI_DISTRICTS_WGS84.map((src) => {
+  // 1A. Neighboring Provinces & Progressive Cities Metadata with Survey-Grade Boundaries
+  const provinces: ProvinceRegionInfo[] = NEIGHBOR_PROVINCES_WGS84.map((src) => {
+    const pt = toWorld(src.gatewayCenter[0], src.gatewayCenter[1]);
+    const polygons = src.rings.map((ring) => ring.map(([la, lo]) => toWorld(la, lo)));
+    return {
+      id: src.id,
+      name: src.name,
+      x: pt.x,
+      y: pt.y,
+      lat: src.gatewayCenter[0],
+      lon: src.gatewayCenter[1],
+      unlockCostWan: src.unlockCostWan,
+      unlocked: false,
+      closestCityId: src.closestCityId,
+      description: src.description,
+      polygons,
+    };
+  });
+
+  const cities: CityRegionInfo[] = NEIGHBOR_CITIES_WGS84.map((src) => {
+    const pt = toWorld(src.center[0], src.center[1]);
+    const polygons = src.rings.map((ring) => ring.map(([la, lo]) => toWorld(la, lo)));
+    return {
+      id: src.id,
+      name: src.name,
+      provinceId: src.provinceId,
+      x: pt.x,
+      y: pt.y,
+      lat: src.center[0],
+      lon: src.center[1],
+      unlockCostWan: src.unlockCostWan,
+      unlocked: false,
+      isClosestToShanghai: src.isClosestToShanghai,
+      closestDistrictId: src.closestDistrictId,
+      distanceKmFromShanghai: src.distanceKmFromShanghai,
+      adjacentCityIds: src.adjacentCityIds,
+      polygons,
+    };
+  });
+
+  // 1B. Administrative boundaries for all 16 Shanghai districts + all 185 Jiangsu & Zhejiang districts
+  const shanghaiDistricts: DistrictInfo[] = SHANGHAI_DISTRICTS_WGS84.map((src) => {
     const centerWorld = toWorld(src.center[0], src.center[1]);
     const polygons = src.rings.map((ring) => ring.map(([la, lo]) => toWorld(la, lo)));
     const isStarter = startYear >= src.unlockYear;
@@ -604,12 +689,47 @@ export function generateCityMap(
       isStarter,
       unlocked: isStarter,
       growthMultiplier: src.growthMultiplier,
+      provinceId: 'prov_sh',
+      provinceName: '上海市',
+      cityId: 'city_sh',
+      cityName: '上海市',
     };
   });
 
-  // 2. High-precision Huangpu River & Suzhou Creek centerlines (aligned to Esri / GIS boundary)
+  const neighborDistricts: DistrictInfo[] = NEIGHBOR_DISTRICTS_WGS84.map((src) => {
+    const centerWorld = toWorld(src.center[0], src.center[1]);
+    const polygons = src.rings.map((ring) => ring.map(([la, lo]) => toWorld(la, lo)));
+    return {
+      id: src.id,
+      name: src.name,
+      x: centerWorld.x,
+      y: centerWorld.y,
+      radius: src.radius,
+      polygon: polygons[0],
+      polygons,
+      unlockYear: 1995,
+      unlockCostWan: src.unlockCostWan,
+      isStarter: false,
+      unlocked: false,
+      growthMultiplier: src.growthMultiplier,
+      provinceId: src.provinceId,
+      provinceName: src.provinceName,
+      cityId: src.cityId,
+      cityName: src.cityName,
+      distanceOrder: src.distanceOrder,
+      prereqDistrictId: src.prereqDistrictId,
+      adjacentDistrictIds: src.adjacentDistrictIds,
+      isCityClosestToShanghai: src.isCityClosestToShanghai,
+    };
+  });
+
+  const districts: DistrictInfo[] = [...shanghaiDistricts, ...neighborDistricts];
+
+  // 2. High-precision Huangpu River, Suzhou Creek, Qiantang River & Yangtze River centerlines
   const huangpuPoints = SHANGHAI_HUANGPU_WGS84.map(([la, lo]) => toWorld(la, lo));
   const suzhouPoints = SHANGHAI_SUZHOU_WGS84.map(([la, lo]) => toWorld(la, lo));
+  const qiantangPoints = QIANTANG_RIVER_WGS84.map(([la, lo]) => toWorld(la, lo));
+  const yangtzePoints = YANGTZE_RIVER_WGS84.map(([la, lo]) => toWorld(la, lo));
 
   const rivers: RiverPath[] = [
     {
@@ -625,9 +745,21 @@ export function generateCityMap(
       width: 1.4,
       points: suzhouPoints,
     },
+    {
+      id: 'rv_qt',
+      name: '錢塘江',
+      width: 12,
+      points: qiantangPoints,
+    },
+    {
+      id: 'rv_cj',
+      name: '長江',
+      width: 16,
+      points: yangtzePoints,
+    },
   ];
 
-  // 3. Exact inland water bodies (Huangpu bank-to-bank polygon, Dianshan Lake, Dishui Lake)
+  // 3. Exact inland water bodies (Huangpu bank polygon, Dianshan, Dishui, Taihu, Hongze, Gaoyou, Qiandao)
   const waterPolygons = [
     {
       id: 'river_huangpu_poly',
@@ -644,29 +776,52 @@ export function generateCityMap(
       name: '滴水湖',
       points: SHANGHAI_DISHUI_LAKE_WGS84.map(([la, lo]) => toWorld(la, lo)),
     },
+    {
+      id: 'lake_taihu',
+      name: '太湖',
+      points: TAIHU_LAKE_POLY_WGS84.map(([la, lo]) => toWorld(la, lo)),
+    },
+    {
+      id: 'lake_hongze',
+      name: '洪澤湖',
+      points: HONGZE_LAKE_POLY_WGS84.map(([la, lo]) => toWorld(la, lo)),
+    },
+    {
+      id: 'lake_gaoyou',
+      name: '高郵湖',
+      points: GAOYOU_LAKE_POLY_WGS84.map(([la, lo]) => toWorld(la, lo)),
+    },
+    {
+      id: 'lake_qiandao',
+      name: '千島湖',
+      points: QIANDAO_LAKE_POLY_WGS84.map(([la, lo]) => toWorld(la, lo)),
+    },
   ];
 
-  // 4. Urban population & employment centers across all 16 districts
-  addGeoCenter(31.232, 121.475, 0.08, 'cbd'); // People's Square / Huangpu
-  addGeoCenter(31.224, 121.446, 0.07, 'cbd'); // Jing'an
-  addGeoCenter(31.195, 121.438, 0.08, 'res'); // Xuhui
-  addGeoCenter(31.238, 121.505, 0.09, 'cbd'); // Lujiazui
-  addGeoCenter(31.268, 121.482, 0.07, 'res'); // Hongkou
-  addGeoCenter(31.218, 121.416, 0.07, 'res'); // Changning
-  addGeoCenter(31.256, 121.410, 0.07, 'res'); // Putuo
-  addGeoCenter(31.296, 121.525, 0.08, 'ind'); // Yangpu / Wujiaochang
-  addGeoCenter(31.112, 121.385, 0.09, 'res'); // Minhang
-  addGeoCenter(31.385, 121.465, 0.09, 'ind'); // Baoshan
-  addGeoCenter(31.375, 121.255, 0.09, 'res'); // Jiading
-  addGeoCenter(31.028, 121.225, 0.09, 'res'); // Songjiang
-  addGeoCenter(31.148, 121.125, 0.08, 'res'); // Qingpu
-  addGeoCenter(31.192, 121.695, 0.09, 'ind'); // Pudong Chuansha
-  addGeoCenter(31.032, 121.755, 0.08, 'res'); // Huinan / Lingang
-  addGeoCenter(30.925, 121.465, 0.08, 'res'); // Fengxian Nanqiao
-  addGeoCenter(30.745, 121.335, 0.08, 'ind'); // Jinshan Petrochemical / Jinshanwei
-  addGeoCenter(31.622, 121.410, 0.08, 'res'); // Chongming Chengqiao
+  // 4. Urban population & employment centers across Shanghai + all 185 neighbor districts
+  addGeoCenterPx(31.232, 121.475, 320, 'cbd'); // People's Square / Huangpu
+  addGeoCenterPx(31.224, 121.446, 280, 'cbd'); // Jing'an
+  addGeoCenterPx(31.195, 121.438, 310, 'res'); // Xuhui
+  addGeoCenterPx(31.238, 121.505, 360, 'cbd'); // Lujiazui
+  addGeoCenterPx(31.268, 121.482, 280, 'res'); // Hongkou
+  addGeoCenterPx(31.218, 121.416, 280, 'res'); // Changning
+  addGeoCenterPx(31.256, 121.410, 280, 'res'); // Putuo
+  addGeoCenterPx(31.296, 121.525, 310, 'ind'); // Yangpu / Wujiaochang
+  addGeoCenterPx(31.112, 121.385, 340, 'res'); // Minhang
+  addGeoCenterPx(31.385, 121.465, 340, 'ind'); // Baoshan
+  addGeoCenterPx(31.375, 121.255, 340, 'res'); // Jiading
+  addGeoCenterPx(31.028, 121.225, 340, 'res'); // Songjiang
+  addGeoCenterPx(31.148, 121.125, 310, 'res'); // Qingpu
+  addGeoCenterPx(31.192, 121.695, 340, 'ind'); // Pudong Chuansha
+  addGeoCenterPx(31.032, 121.755, 310, 'res'); // Huinan / Lingang
+  addGeoCenterPx(30.925, 121.465, 310, 'res'); // Fengxian Nanqiao
+  addGeoCenterPx(30.745, 121.335, 310, 'ind'); // Jinshan
+  addGeoCenterPx(31.622, 121.410, 310, 'res'); // Chongming
+  for (const nc of NEIGHBOR_URBAN_CENTERS_WGS84) {
+    addGeoCenterPx(nc.lat, nc.lon, nc.radiusNorm * 13120, nc.type);
+  }
 
-  // 5. Real Shanghai Landmarks & Transport Hubs
+  // 5. Real Shanghai & Neighboring Intercity Landmarks & Transport Hubs
   addGeoPoi('p_sjtu', '上海交通大學 (徐匯)', 'university', 31.2010, 121.4342);
   addGeoPoi('p_sjtu_mh', '上海交通大學 (閔行)', 'university', 31.0258, 121.4368);
   addGeoPoi('p_fudan', '復旦大學 (邯鄲)', 'university', 31.2975, 121.5035);
@@ -680,8 +835,60 @@ export function generateCityMap(
   addGeoPoi('p_sec', '上海展覽中心', 'park', 31.2255, 121.4525);
   addGeoPoi('p_ds_lake', '朱家角 · 澱山湖', 'park', 31.1112, 121.0535);
   addGeoPoi('p_dishui', '滴水湖 · 臨港新片區', 'park', 30.8965, 121.9380);
+  for (const np of NEIGHBOR_POIS_WGS84) {
+    addGeoPoi(np.id, np.name, np.kind, np.lat, np.lon);
+  }
 
-  // 6. Grid terrain & urban demographics strictly masked to real land polygons (sea/estuary/rivers/lake = water)
+  // Precompute bounding boxes for O(1) culling across 66k cells x 201 districts / water / centers
+  const computeRingBbox = (ring: { x: number; y: number }[]) => {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const p of ring) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+    return { ring, minX, maxX, minY, maxY };
+  };
+
+  const districtChecks = districts.map((d) => {
+    const rings = (d.polygons ?? []).filter((r) => r.length >= 3).map(computeRingBbox);
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const rb of rings) {
+      if (rb.minX < minX) minX = rb.minX;
+      if (rb.maxX > maxX) maxX = rb.maxX;
+      if (rb.minY < minY) minY = rb.minY;
+      if (rb.maxY > maxY) maxY = rb.maxY;
+    }
+    return { rings, minX, maxX, minY, maxY };
+  });
+
+  const waterChecks = waterPolygons.map((lake) => ({
+    ...computeRingBbox(lake.points),
+  }));
+
+  const riverChecks = rivers
+    .filter((rv) => !rv.skipPolylineWaterCheck)
+    .map((rv) => {
+      const bb = computeRingBbox(rv.points);
+      const pad = rv.width * 0.6;
+      return {
+        points: rv.points,
+        threshold: rv.width * 0.55,
+        minX: bb.minX - pad,
+        maxX: bb.maxX + pad,
+        minY: bb.minY - pad,
+        maxY: bb.maxY + pad,
+      };
+    });
+
+  // 6. Grid terrain & urban demographics strictly masked to real land polygons
   for (let gy = 0; gy < rows; gy++) {
     for (let gx = 0; gx < cols; gx++) {
       const wx = (gx + 0.5) * cellSize;
@@ -689,23 +896,30 @@ export function generateCityMap(
       const nx = gx / cols;
       const ny = gy / rows;
 
-      const insideLandDistrict = districts.some((d) =>
-        (d.polygons ?? []).some((ring) => isPointInRing(wx, wy, ring))
-      );
+      let insideLandDistrict = false;
+      for (const dc of districtChecks) {
+        if (wx < dc.minX || wx > dc.maxX || wy < dc.minY || wy > dc.maxY) continue;
+        for (const rb of dc.rings) {
+          if (wx >= rb.minX && wx <= rb.maxX && wy >= rb.minY && wy <= rb.maxY && isPointInRing(wx, wy, rb.ring)) {
+            insideLandDistrict = true;
+            break;
+          }
+        }
+        if (insideLandDistrict) break;
+      }
 
       let isWater = !insideLandDistrict;
       if (!isWater) {
-        for (const lake of waterPolygons) {
-          if (isPointInRing(wx, wy, lake.points)) {
+        for (const wc of waterChecks) {
+          if (wx >= wc.minX && wx <= wc.maxX && wy >= wc.minY && wy <= wc.maxY && isPointInRing(wx, wy, wc.ring)) {
             isWater = true;
             break;
           }
         }
       }
       if (!isWater) {
-        for (const rv of rivers) {
-          if (rv.skipPolylineWaterCheck) continue;
-          if (distToPolyline(wx, wy, rv.points) <= rv.width * 0.55) {
+        for (const rc of riverChecks) {
+          if (wx >= rc.minX && wx <= rc.maxX && wy >= rc.minY && wy <= rc.maxY && distToPolyline(wx, wy, rc.points) <= rc.threshold) {
             isWater = true;
             break;
           }
@@ -723,12 +937,13 @@ export function generateCityMap(
       if (terrain === 'land') {
         let bestScore = 0;
         let bestType: 'cbd' | 'res' | 'ind' = 'res';
-        const localJitter = valueNoise2D(nx * 14, ny * 14, seed + 55);
+        const localJitter = valueNoise2D(nx * 24, ny * 24, seed + 55);
 
-        for (const c of centers) {
-          const d = Math.hypot(nx - c.x, ny - c.y);
-          if (d < c.radius) {
-            const score = (1 - d / c.radius) * (0.75 + localJitter * 0.4);
+        for (const c of worldCenters) {
+          if (Math.abs(wx - c.wx) > c.radiusPx || Math.abs(wy - c.wy) > c.radiusPx) continue;
+          const d = Math.hypot(wx - c.wx, wy - c.wy);
+          if (d < c.radiusPx) {
+            const score = (1 - d / c.radiusPx) * (0.78 + localJitter * 0.38);
             if (score > bestScore) {
               bestScore = score;
               bestType = c.type;
@@ -740,26 +955,26 @@ export function generateCityMap(
           if (bestType === 'cbd') {
             zone = localJitter > 0.78 ? 'park' : 'commercial';
             if (zone === 'commercial') {
-              jobs = Math.round(bestScore * 880);
-              population = Math.round(bestScore * 240);
+              jobs = Math.round(bestScore * 2200);
+              population = Math.round(bestScore * 640);
             }
           } else if (bestType === 'ind') {
             zone = 'industrial';
-            jobs = Math.round(bestScore * 640);
-            population = Math.round(bestScore * 90);
+            jobs = Math.round(bestScore * 1650);
+            population = Math.round(bestScore * 240);
           } else {
             zone = localJitter > 0.85 ? 'commercial' : 'residential';
             if (zone === 'residential') {
-              population = Math.round(bestScore * 820);
-              jobs = Math.round(bestScore * 100);
+              population = Math.round(bestScore * 2100);
+              jobs = Math.round(bestScore * 280);
             } else {
-              jobs = Math.round(bestScore * 380);
-              population = Math.round(bestScore * 240);
+              jobs = Math.round(bestScore * 960);
+              population = Math.round(bestScore * 620);
             }
           }
-        } else if (localJitter > 0.68) {
+        } else if (localJitter > 0.66) {
           zone = 'residential';
-          population = Math.round(70 + localJitter * 90);
+          population = Math.round(180 + localJitter * 240);
         }
       }
 
@@ -772,7 +987,7 @@ export function generateCityMap(
         population,
         jobs,
         landValue: zone === 'commercial' ? 1.5 : 1.0,
-        roadCongestion: Math.min(1, (population + jobs) / 1100),
+        roadCongestion: Math.min(1, (population + jobs) / 2800),
         coveredByMetro: false,
         lightSeed: hash2D(gx, gy, seed + 303),
       });
@@ -780,7 +995,7 @@ export function generateCityMap(
   }
 
   const roads: CityMap['roads'] = []; // Loaded asynchronously via OpenStreetMap Overpass
-  const buildings = generateBuildingsFromCells(cols, rows, cellSize, cells, seed, centers);
+  const buildings = generateBuildingsFromCells(cols, rows, cellSize, cells, seed);
 
   return {
     cols,
@@ -795,6 +1010,8 @@ export function generateCityMap(
     mode,
     cells,
     districts,
+    provinces,
+    cities,
     roads,
     rivers,
     waterPolygons,

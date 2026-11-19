@@ -48,6 +48,46 @@ export interface DistrictInfo {
   isStarter: boolean;
   unlocked: boolean;
   growthMultiplier: number;
+  provinceId?: string;
+  provinceName?: string;
+  cityId?: string;
+  cityName?: string;
+  distanceOrder?: number;
+  prereqDistrictId?: string;
+  adjacentDistrictIds?: string[];
+  isCityClosestToShanghai?: boolean;
+}
+
+export interface ProvinceRegionInfo {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  lat: number;
+  lon: number;
+  polygons?: { x: number; y: number }[][];
+  unlockCostWan: number;
+  unlocked: boolean;
+  closestCityId: string;
+  description: string;
+}
+
+export interface CityRegionInfo {
+  id: string;
+  name: string;
+  provinceId: string;
+  x: number;
+  y: number;
+  lat: number;
+  lon: number;
+  polygons?: { x: number; y: number }[][];
+  adjacentCityIds?: string[];
+  unlockCostWan: number;
+  unlocked: boolean;
+  isClosestToShanghai: boolean;
+  prereqCityId?: string;
+  closestDistrictId: string;
+  distanceKmFromShanghai: number;
 }
 
 export interface RoadSegment {
@@ -120,6 +160,8 @@ export interface CityMap {
   mode: MapMode;
   cells: CityCell[];
   districts: DistrictInfo[];
+  provinces?: ProvinceRegionInfo[];
+  cities?: CityRegionInfo[];
   roads: RoadSegment[];
   rivers: RiverPath[];
   waterPolygons?: { id: string; name: string; points: { x: number; y: number }[] }[];

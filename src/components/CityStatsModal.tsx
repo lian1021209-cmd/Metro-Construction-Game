@@ -9,6 +9,11 @@ import {
   TrendingUp,
   Lock,
   Unlock,
+  ArrowRight,
+  Compass,
+  ChevronDown,
+  ChevronRight,
+  Search,
 } from 'lucide-react';
 import {
   CityMap,
@@ -19,7 +24,13 @@ import {
   Station,
   TransitLine,
 } from '../types/game';
-import { getDistrictUnlockCost } from '../engine/simulation';
+import {
+  getCityUnlockCost,
+  getCityUnlockPrereq,
+  getDistrictUnlockCost,
+  getDistrictUnlockPrereq,
+  getProvinceUnlockCost,
+} from '../engine/simulation';
 import { formatCurrencyWan, formatPop, formatRidershipWan, t } from '../i18n/translations';
 
 interface CityStatsModalProps {
@@ -35,6 +46,7 @@ interface CityStatsModalProps {
   lines: TransitLine[];
   history: HistorySnapshot[];
   onUnlockDistrict: (districtId: string) => void;
+  onUnlockRegion?: (kind: 'province' | 'city' | 'district', id: string) => void;
   onLocateDistrict?: (x: number, y: number, label: string) => void;
 }
 
@@ -76,9 +88,13 @@ export const CityStatsModal: React.FC<CityStatsModalProps> = ({
   lines,
   history,
   onUnlockDistrict,
+  onUnlockRegion,
   onLocateDistrict,
 }) => {
   const [tab, setTab] = useState<'overview' | 'traffic' | 'economy' | 'chronicle' | 'features' | 'rating'>('overview');
+  const [regionQuery, setRegionQuery] = useState('');
+  const [regionFilter, setRegionFilter] = useState<'all' | 'unlockable' | 'unlocked'>('all');
+  const [expandedCities, setExpandedCities] = useState<Record<string, boolean>>({});
 
   if (!open) return null;
 
@@ -388,72 +404,401 @@ export const CityStatsModal: React.FC<CityStatsModalProps> = ({
           )}
 
           {tab === 'features' && (
-            <div className="space-y-4">
-              <div className="p-3.5 rounded-lg bg-white border border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
-                <span className="text-slate-600">
-                  {lang === 'en'
-                    ? 'Starter spawn zones are open at game start. Other districts require funding to unlock.'
-                    : '「開局出生點」於遊戲開局即開放建設；其餘外圍地區採用金錢解鎖制，解鎖後即可設站擴網。'}
-                </span>
-                <span className="font-mono-tabular font-semibold text-slate-900">
-                  {map.districts.filter((d) => d.unlocked).length} / {map.districts.length}{' '}
-                  {lang === 'en' ? 'Unlocked' : '已解鎖'}
-                </span>
+            <div className="space-y-5">
+              {/* Summary Header + Filter Bar */}
+              <div className="p-3.5 rounded-lg bg-white border border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div className="space-y-0.5">
+                  <div className="text-slate-800 font-semibold">
+                    {lang === 'en'
+                      ? 'Province → Nearest City → Nearest District Cascade'
+                      : '跨省層級解鎖：解鎖鄰省自動開放最近「市」與最近「區縣」，並可沿相鄰行政區逐層向外擴張'}
+                  </div>
+                  <div className="text-[11px] text-slate-500 font-mono-tabular">
+                    已開放 {map.districts.filter((d) => d.unlocked).length} / {map.districts.length} 區縣 ·{' '}
+                    {(map.cities ?? []).filter((c) => c.unlocked).length} / {(map.cities ?? []).length} 跨省城市
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={regionQuery}
+                      onChange={(e) => setRegionQuery(e.target.value)}
+                      placeholder="搜尋省/市/區縣..."
+                      className="pl-7 pr-2.5 py-1.5 rounded-md border border-slate-200 bg-slate-50 text-xs text-slate-800 focus:outline-none focus:border-blue-400 w-44"
+                    />
+                  </div>
+                  <div className="flex items-center p-0.5 rounded-md bg-slate-100 border border-slate-200">
+                    {(
+                      [
+                        ['all', '全部'],
+                        ['unlockable', '可解鎖'],
+                        ['unlocked', '已開放'],
+                      ] as const
+                    ).map(([id, label]) => (
+                      <button
+                        key={id}
+                        onClick={() => setRegionFilter(id)}
+                        className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${
+                          regionFilter === id
+                            ? 'bg-white text-slate-900 shadow-sm'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                {map.districts.map((d) => {
-                  const cost = getDistrictUnlockCost(d, difficulty);
-                  return (
-                    <div
-                      key={d.id}
-                      className="p-4 rounded-xl bg-white border border-slate-200 flex items-center justify-between gap-3"
-                    >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-slate-900 truncate">{d.name}</span>
-                          <span className="text-[11px] font-mono-tabular text-slate-400">
-                            {d.growthMultiplier.toFixed(2)}x
-                          </span>
+
+              {/* Neighboring Provinces Section */}
+              {(map.provinces?.length ?? 0) > 0 && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold tracking-wide text-slate-700 flex items-center gap-1.5">
+                      <Compass className="w-3.5 h-3.5 text-blue-600" />
+                      跨省都市圈層級擴張（江蘇省 13 市 · 浙江省 11 市 · 共 185 縣區）
+                    </h3>
+                    <span className="text-[11px] text-slate-500 font-mono-tabular">
+                      省 → 最近市 → 最近區
+                    </span>
+                  </div>
+
+                  <div className="space-y-3">
+                    {map.provinces!.map((prov) => {
+                      const provCost = getProvinceUnlockCost(prov, difficulty);
+                      const q = regionQuery.trim();
+                      const provCities = (map.cities ?? [])
+                        .filter((c) => c.provinceId === prov.id)
+                        .sort((a, b) => a.distanceKmFromShanghai - b.distanceKmFromShanghai);
+                      const closestCity = provCities.find((c) => c.id === prov.closestCityId);
+                      const closestDist = closestCity
+                        ? map.districts.find((d) => d.id === closestCity.closestDistrictId)
+                        : undefined;
+
+                      const visibleCities = provCities.filter((city) => {
+                        const cityPrereq = getCityUnlockPrereq(map, city);
+                        const cityDistricts = map.districts.filter((d) => d.cityId === city.id);
+                        const matchesQuery =
+                          !q ||
+                          prov.name.includes(q) ||
+                          city.name.includes(q) ||
+                          cityDistricts.some((d) => d.name.includes(q));
+                        if (!matchesQuery) return false;
+                        if (regionFilter === 'unlocked') return city.unlocked;
+                        if (regionFilter === 'unlockable') {
+                          return (
+                            (!city.unlocked && cityPrereq.canUnlock) ||
+                            (city.unlocked && cityDistricts.some((d) => !d.unlocked && getDistrictUnlockPrereq(map, d).canUnlock))
+                          );
+                        }
+                        return true;
+                      });
+
+                      if (q && visibleCities.length === 0 && !prov.name.includes(q)) {
+                        return null;
+                      }
+
+                      return (
+                        <div
+                          key={prov.id}
+                          className={`rounded-xl border overflow-hidden ${
+                            prov.unlocked
+                              ? 'bg-white border-blue-200'
+                              : 'bg-slate-50/70 border-slate-200'
+                          }`}
+                        >
+                          {/* Province Banner */}
+                          <div className="p-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-white">
+                            <div className="min-w-0 space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-bold text-slate-900">{prov.name}</span>
+                                <span className="text-[11px] font-mono-tabular text-slate-400">
+                                  {provCities.filter((c) => c.unlocked).length}/{provCities.length} 市
+                                </span>
+                                {prov.unlocked ? (
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
+                                    <Unlock className="w-3 h-3" /> 已開放跨省門戶
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+                                    <Lock className="w-3 h-3" /> 尚未解鎖（地圖僅顯示省界）
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-slate-500">{prov.description}</p>
+                              {!prov.unlocked && closestCity && closestDist && (
+                                <div className="flex items-center gap-1.5 text-[11px] text-blue-700 font-medium pt-0.5">
+                                  <span>聯動開啟：</span>
+                                  <span>{prov.name}</span>
+                                  <ArrowRight className="w-3 h-3" />
+                                  <span>{closestCity.name}（最近市）</span>
+                                  <ArrowRight className="w-3 h-3" />
+                                  <span>{closestDist.name}（最近區）</span>
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-2 shrink-0">
+                              {onLocateDistrict && (
+                                <button
+                                  onClick={() => onLocateDistrict(prov.x, prov.y, prov.name)}
+                                  className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium whitespace-nowrap transition-colors"
+                                >
+                                  {t(lang, 'locateBtn')}
+                                </button>
+                              )}
+                              {!prov.unlocked && (
+                                <button
+                                  onClick={() =>
+                                    onUnlockRegion
+                                      ? onUnlockRegion('province', prov.id)
+                                      : undefined
+                                  }
+                                  className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold font-mono-tabular text-[11px] whitespace-nowrap transition-colors"
+                                >
+                                  解鎖{prov.name} · {formatCurrencyWan(provCost, lang)}
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Cities inside Province */}
+                          <div className="p-3 space-y-2">
+                            {visibleCities.map((city) => {
+                              const cityCost = getCityUnlockCost(city, difficulty);
+                              const cityPrereq = getCityUnlockPrereq(map, city);
+                              const cityDistricts = map.districts
+                                .filter((d) => d.cityId === city.id)
+                                .sort((a, b) => (a.distanceOrder ?? 99) - (b.distanceOrder ?? 99));
+                              const autoDist = cityDistricts.find((d) => d.id === city.closestDistrictId);
+                              const unlockedDistCount = cityDistricts.filter((d) => d.unlocked).length;
+                              const isExpanded =
+                                expandedCities[city.id] ?? (city.unlocked || Boolean(q));
+
+                              return (
+                                <div
+                                  key={city.id}
+                                  className={`p-3 rounded-lg border text-xs ${
+                                    city.unlocked
+                                      ? 'bg-white border-slate-200'
+                                      : 'bg-slate-100/70 border-slate-200/80'
+                                  }`}
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setExpandedCities((prev) => ({
+                                          ...prev,
+                                          [city.id]: !isExpanded,
+                                        }))
+                                      }
+                                      className="flex items-center gap-2 min-w-0 text-left"
+                                    >
+                                      {isExpanded ? (
+                                        <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                      ) : (
+                                        <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                      )}
+                                      <span className="font-semibold text-slate-900">{city.name}</span>
+                                      <span className="text-[11px] font-mono-tabular text-slate-400">
+                                        {unlockedDistCount}/{cityDistricts.length} 區 · {city.distanceKmFromShanghai} km
+                                      </span>
+                                      {city.isClosestToShanghai && (
+                                        <span className="text-[10px] font-medium text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded">
+                                          離上海最近市
+                                        </span>
+                                      )}
+                                      {city.unlocked ? (
+                                        <span className="text-[11px] text-emerald-700 font-medium">
+                                          ✓ 已開放
+                                        </span>
+                                      ) : !cityPrereq.canUnlock ? (
+                                        <span className="text-[11px] text-slate-500">
+                                          需先解鎖 {cityPrereq.blockedByName}
+                                        </span>
+                                      ) : null}
+                                    </button>
+
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      {onLocateDistrict && (
+                                        <button
+                                          onClick={() => onLocateDistrict(city.x, city.y, city.name)}
+                                          className="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] transition-colors"
+                                        >
+                                          {t(lang, 'locateBtn')}
+                                        </button>
+                                      )}
+                                      {!city.unlocked && (
+                                        <button
+                                          onClick={() =>
+                                            onUnlockRegion
+                                              ? onUnlockRegion('city', city.id)
+                                              : undefined
+                                          }
+                                          disabled={!cityPrereq.canUnlock}
+                                          className={`px-2.5 py-1 rounded font-semibold font-mono-tabular text-[11px] whitespace-nowrap transition-colors ${
+                                            cityPrereq.canUnlock
+                                              ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                                              : 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                                          }`}
+                                        >
+                                          {cityPrereq.canUnlock
+                                            ? `解鎖${city.name}${autoDist ? `（含${autoDist.name}）` : ''} · ${formatCurrencyWan(cityCost, lang)}`
+                                            : `需 ${cityPrereq.blockedByName}`}
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {/* Progressive Districts inside this City */}
+                                  {isExpanded && (
+                                    <div className="mt-2.5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                                      {cityDistricts
+                                        .filter((d) => !q || d.name.includes(q) || city.name.includes(q))
+                                        .map((d) => {
+                                          const distCost = getDistrictUnlockCost(d, difficulty);
+                                          const distPrereq = getDistrictUnlockPrereq(map, d);
+                                          return (
+                                            <div
+                                              key={d.id}
+                                              className={`px-2.5 py-2 rounded-md border flex items-center justify-between gap-2 ${
+                                                d.unlocked
+                                                  ? 'bg-blue-50/40 border-blue-200/80'
+                                                  : 'bg-white border-slate-200'
+                                              }`}
+                                            >
+                                              <div className="min-w-0">
+                                                <div className="flex items-center gap-1.5">
+                                                  <span className="font-medium text-slate-900 truncate">
+                                                    {d.name}
+                                                  </span>
+                                                  {d.isCityClosestToShanghai && (
+                                                    <span className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-1 rounded shrink-0">
+                                                      最近區
+                                                    </span>
+                                                  )}
+                                                </div>
+                                                <div className="text-[10px] text-slate-500 mt-0.5 font-mono-tabular">
+                                                  成長 {d.growthMultiplier.toFixed(2)}x
+                                                  {!d.unlocked && !distPrereq.canUnlock
+                                                    ? ` · 需先解鎖${distPrereq.blockedByName}`
+                                                    : ''}
+                                                </div>
+                                              </div>
+
+                                              {d.unlocked ? (
+                                                <button
+                                                  onClick={() => onLocateDistrict?.(d.x, d.y, d.name)}
+                                                  className="px-2 py-1 rounded bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-[10px] shrink-0"
+                                                >
+                                                  定位
+                                                </button>
+                                              ) : (
+                                                <button
+                                                  onClick={() =>
+                                                    onUnlockRegion
+                                                      ? onUnlockRegion('district', d.id)
+                                                      : onUnlockDistrict(d.id)
+                                                  }
+                                                  disabled={!distPrereq.canUnlock}
+                                                  className={`px-2 py-1 rounded text-[10px] font-semibold font-mono-tabular shrink-0 ${
+                                                    distPrereq.canUnlock
+                                                      ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                                                      : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                                  }`}
+                                                >
+                                                  {distPrereq.canUnlock
+                                                    ? formatCurrencyWan(distCost, lang)
+                                                    : '未前置'}
+                                                </button>
+                                              )}
+                                            </div>
+                                          );
+                                        })}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
-                        <div className="mt-1">
-                          {d.isStarter ? (
-                            <span className="inline-flex items-center text-[11px] font-medium text-emerald-700">
-                              {lang === 'en' ? 'Starting Spawn Point' : '開局出生點'}
-                            </span>
-                          ) : d.unlocked ? (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-700">
-                              <Unlock className="w-3 h-3" />
-                              {lang === 'en' ? 'Unlocked District' : '已花費解鎖'}
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700">
-                              <Lock className="w-3 h-3" />
-                              {lang === 'en' ? 'Locked District' : '未解鎖地區'}
-                            </span>
-                          )}
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Shanghai 16 Districts Section */}
+              <div className="space-y-2.5">
+                <h3 className="text-xs font-bold tracking-wide text-slate-700">
+                  上海市轄區（16 個行政區）
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                  {map.districts
+                    .filter((d) => !d.provinceId || d.provinceId === 'prov_sh')
+                    .map((d) => {
+                      const cost = getDistrictUnlockCost(d, difficulty);
+                      return (
+                        <div
+                          key={d.id}
+                          className="p-4 rounded-xl bg-white border border-slate-200 flex items-center justify-between gap-3"
+                        >
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-slate-900 truncate">{d.name}</span>
+                              <span className="text-[11px] font-mono-tabular text-slate-400">
+                                {d.growthMultiplier.toFixed(2)}x
+                              </span>
+                            </div>
+                            <div className="mt-1">
+                              {d.isStarter ? (
+                                <span className="inline-flex items-center text-[11px] font-medium text-emerald-700">
+                                  {lang === 'en' ? 'Starting Spawn Point' : '開局出生點'}
+                                </span>
+                              ) : d.unlocked ? (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-700">
+                                  <Unlock className="w-3 h-3" />
+                                  {lang === 'en' ? 'Unlocked District' : '已花費解鎖'}
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-700">
+                                  <Lock className="w-3 h-3" />
+                                  {lang === 'en' ? 'Locked District' : '未解鎖地區'}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            {onLocateDistrict && (
+                              <button
+                                onClick={() => onLocateDistrict(d.x, d.y, d.name)}
+                                className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium whitespace-nowrap transition-colors"
+                              >
+                                {t(lang, 'locateBtn')}
+                              </button>
+                            )}
+                            {!d.unlocked && (
+                              <button
+                                onClick={() =>
+                                  onUnlockRegion
+                                    ? onUnlockRegion('district', d.id)
+                                    : onUnlockDistrict(d.id)
+                                }
+                                className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold font-mono-tabular text-[11px] whitespace-nowrap transition-colors"
+                              >
+                                {lang === 'en' ? 'Unlock' : '解鎖'} · {formatCurrencyWan(cost, lang)}
+                              </button>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        {onLocateDistrict && (
-                          <button
-                            onClick={() => onLocateDistrict(d.x, d.y, d.name)}
-                            className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium whitespace-nowrap transition-colors"
-                          >
-                            {t(lang, 'locateBtn')}
-                          </button>
-                        )}
-                        {!d.unlocked && (
-                          <button
-                            onClick={() => onUnlockDistrict(d.id)}
-                            className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white font-semibold font-mono-tabular text-[11px] whitespace-nowrap transition-colors"
-                          >
-                            {lang === 'en' ? 'Unlock' : '解鎖'} · {formatCurrencyWan(cost, lang)}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+                      );
+                    })}
+                </div>
               </div>
             </div>
           )}

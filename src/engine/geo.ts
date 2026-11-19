@@ -274,9 +274,12 @@ const overpassCache = new Map<string, OverpassGeoResult>();
 export async function fetchOverpassCityGeometry(
   bounds: GeoBounds,
   mapWidth: number,
-  mapHeight: number
+  mapHeight: number,
+  focusCenter?: { lat: number; lon: number }
 ): Promise<OverpassGeoResult | null> {
-  const key = `${bounds.centerLat.toFixed(3)}_${bounds.centerLon.toFixed(3)}`;
+  const cLat = focusCenter?.lat ?? 31.232;
+  const cLon = focusCenter?.lon ?? 121.475;
+  const key = `${cLat.toFixed(3)}_${cLon.toFixed(3)}`;
   const cached = overpassCache.get(key);
   if (cached) return cached;
 
@@ -288,38 +291,58 @@ export async function fetchOverpassCityGeometry(
   const query = `
 [out:json][timeout:14];
 (
-  way["highway"~"motorway|trunk|primary|secondary|tertiary"]["name"](${bounds.centerLat - dLatRoad},${bounds.centerLon - dLonRoad},${bounds.centerLat + dLatRoad},${bounds.centerLon + dLonRoad});
-  way["building"](${bounds.centerLat - dLatBld},${bounds.centerLon - dLonBld},${bounds.centerLat + dLatBld},${bounds.centerLon + dLonBld});
-  node["amenity"~"university|hospital"]["name"](${bounds.centerLat - dLatRoad},${bounds.centerLon - dLonRoad},${bounds.centerLat + dLatRoad},${bounds.centerLon + dLonRoad});
-  node["aeroway"="terminal"]["name"](${bounds.centerLat - 0.35},${bounds.centerLon - 0.45},${bounds.centerLat + 0.35},${bounds.centerLon + 0.45});
+  way["highway"~"motorway|trunk|primary|secondary|tertiary"]["name"](${cLat - dLatRoad},${cLon - dLonRoad},${cLat + dLatRoad},${cLon + dLonRoad});
+  way["building"](${cLat - dLatBld},${cLon - dLonBld},${cLat + dLatBld},${cLon + dLonBld});
+  node["amenity"~"university|hospital"]["name"](${cLat - dLatRoad},${cLon - dLonRoad},${cLat + dLatRoad},${cLon + dLonRoad});
+  node["aeroway"="terminal"]["name"](${cLat - 0.35},${cLon - 0.45},${cLat + 0.35},${cLon + 0.45});
 );
 out body 4200;
 >;
 out skel qt;
 `.trim();
 
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 9000);
-    const res = await fetch('https://overpass-api.de/api/interpreter', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `data=${encodeURIComponent(query)}`,
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
-    if (!res.ok) return null;
+  const endpoints = [
+    'https://overpass-api.de/api/interpreter',
+    'https://lz4.overpass-api.de/api/interpreter',
+  ];
 
-    const json = (await res.json()) as {
-      elements: Array<{
-        type: 'node' | 'way';
-        id: number;
-        lat?: number;
-        lon?: number;
-        nodes?: number[];
-        tags?: Record<string, string>;
-      }>;
-    };
+  interface OverpassJsonPayload {
+    elements: Array<{
+      type: 'node' | 'way';
+      id: number;
+      lat?: number;
+      lon?: number;
+      nodes?: number[];
+      tags?: Record<string, string>;
+    }>;
+  }
+
+  try {
+    let json: OverpassJsonPayload | null = null;
+
+    for (const url of endpoints) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8500);
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Accept: 'application/json',
+          },
+          body: `data=${encodeURIComponent(query)}`,
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        if (!res.ok) continue;
+        json = (await res.json()) as OverpassJsonPayload;
+        if (json?.elements) break;
+      } catch {
+        // try next Overpass mirror
+      }
+    }
+
+    if (!json || !json.elements) return null;
 
     const nodeMap = new Map<number, { x: number; y: number }>();
     for (const el of json.elements) {
@@ -468,10 +491,17 @@ const S2T_MAP = (() => {
     ['邹', '鄒'], ['颜', '顏'], ['温', '溫'], ['芦', '蘆'], ['鲁', '魯'], ['毕', '畢'],
     ['聂', '聶'], ['齐', '齊'], ['粤', '粵'], ['闽', '閩'], ['赣', '贛'], ['贵', '貴'],
     ['陕', '陝'], ['辽', '遼'], ['证', '證'], ['险', '險'], ['资', '資'], ['税', '稅'],
+    ['昆', '崑'], ['仓', '倉'], ['浔', '潯'], ['盐', '鹽'], ['钱', '錢'], ['余', '餘'],
+    ['锡', '錫'], ['桐', '桐'], ['乡', '鄉'], ['越', '越'], ['柯', '柯'], ['萧', '蕭'],
+    ['绍', '紹'], ['湖', '湖'], ['常', '常'], ['启', '啟'], ['吴', '吳'], ['娄', '婁'],
     ['员', '員'], ['会', '會'], ['检', '檢'], ['动', '動'], ['报', '報'], ['图', '圖'],
     ['展', '展'], ['览', '覽'], ['职', '職'], ['复', '復'], ['济', '濟'], ['财', '財'],
     ['语', '語'], ['研', '研'], ['药', '藥'], ['诊', '診'], ['仪', '儀'], ['纪', '紀'],
     ['欢', '歡'], ['伦', '倫'], ['爱', '愛'], ['梦', '夢'], ['淀', '澱'],
+    ['无', '無'], ['浒', '滸'], ['诸', '諸'], ['缙', '縉'], ['瓯', '甌'], ['镇', '鎮'],
+    ['扬', '揚'], ['淮', '淮'], ['盐', '鹽'], ['连', '連'], ['宿', '宿'], ['迁', '遷'],
+    ['徐', '徐'], ['宁', '寧'], ['绍', '紹'], ['温', '溫'], ['丽', '麗'], ['义', '義'],
+    ['乌', '烏'], ['兰', '蘭'], ['溪', '溪'], ['诸', '諸'], ['桐', '桐'], ['庐', '廬'],
   ];
   for (const [s, t] of extras) m.set(s, t);
   return m;
@@ -491,22 +521,31 @@ export interface ReverseGeocodePlace {
 }
 
 const reverseGeocodeCache = new Map<string, ReverseGeocodePlace | null>();
+const reverseGeocodeCellCache = new Map<string, ReverseGeocodePlace | null>();
+const reverseGeocodeInFlight = new Map<string, Promise<ReverseGeocodePlace | null>>();
 
-export async function reverseGeocodeStationPlace(
-  lat: number,
-  lon: number
-): Promise<ReverseGeocodePlace | null> {
-  const key = `${lat.toFixed(4)}_${lon.toFixed(4)}`;
-  if (reverseGeocodeCache.has(key)) {
-    return reverseGeocodeCache.get(key) ?? null;
+export function getCachedReverseGeocodePlace(lat: number, lon: number): ReverseGeocodePlace | null {
+  const exactKey = `${lat.toFixed(4)}_${lon.toFixed(4)}`;
+  if (reverseGeocodeCache.has(exactKey)) {
+    return reverseGeocodeCache.get(exactKey) ?? null;
   }
+  const cellKey = `${lat.toFixed(3)}_${lon.toFixed(3)}`;
+  if (reverseGeocodeCellCache.has(cellKey)) {
+    return reverseGeocodeCellCache.get(cellKey) ?? null;
+  }
+  return null;
+}
 
+async function queryNominatimReverse(lat: number, lon: number): Promise<ReverseGeocodePlace | null> {
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3500);
+    const timer = setTimeout(() => controller.abort(), 3200);
     const res = await fetch(
-      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat.toFixed(6)}&lon=${lon.toFixed(6)}&zoom=18&accept-language=zh-TW`,
-      { signal: controller.signal }
+      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat.toFixed(6)}&lon=${lon.toFixed(6)}&zoom=18&addressdetails=1&accept-language=zh-TW`,
+      {
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      }
     );
     clearTimeout(timer);
     if (!res.ok) return null;
@@ -522,7 +561,7 @@ export async function reverseGeocodeStationPlace(
     const road = addr.road || addr.pedestrian || addr.footway;
     const neighborhood =
       addr.quarter || addr.neighbourhood || addr.residential || addr.village || addr.hamlet;
-    const subdistrict = addr.town || addr.suburb;
+    const subdistrict = addr.town || addr.suburb || addr.city_district;
 
     let landmark: string | undefined;
     const isMajorPoiCategory =
@@ -543,17 +582,254 @@ export async function reverseGeocodeStationPlace(
       landmark = data.name;
     }
 
-    const result: ReverseGeocodePlace = {
+    return {
       road: road ? toTraditionalPlaceName(road) : undefined,
       neighborhood: neighborhood ? toTraditionalPlaceName(neighborhood) : undefined,
       subdistrict: subdistrict ? toTraditionalPlaceName(subdistrict) : undefined,
       landmark: landmark ? toTraditionalPlaceName(landmark) : undefined,
     };
-
-    reverseGeocodeCache.set(key, result);
-    return result;
   } catch {
     return null;
   }
 }
+
+async function queryPhotonReverse(lat: number, lon: number): Promise<ReverseGeocodePlace | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3200);
+    const res = await fetch(
+      `https://photon.komoot.io/reverse?lat=${lat.toFixed(6)}&lon=${lon.toFixed(6)}`,
+      {
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      }
+    );
+    clearTimeout(timer);
+    if (!res.ok) return null;
+
+    const json = (await res.json()) as {
+      features?: Array<{
+        properties?: {
+          name?: string;
+          street?: string;
+          district?: string;
+          locality?: string;
+          suburb?: string;
+          osm_key?: string;
+          osm_value?: string;
+        };
+      }>;
+    };
+
+    const props = json.features?.[0]?.properties;
+    if (!props) return null;
+
+    const road = props.street || (props.osm_key === 'highway' ? props.name : undefined);
+    const neighborhood = props.locality || props.district;
+    const subdistrict = props.suburb;
+    const isPoi =
+      props.osm_key === 'tourism' ||
+      props.osm_key === 'leisure' ||
+      props.osm_key === 'railway' ||
+      props.osm_key === 'aeroway' ||
+      props.osm_key === 'amenity';
+    const landmark = isPoi && props.name && props.name !== road ? props.name : undefined;
+
+    return {
+      road: road ? toTraditionalPlaceName(road) : undefined,
+      neighborhood: neighborhood ? toTraditionalPlaceName(neighborhood) : undefined,
+      subdistrict: subdistrict ? toTraditionalPlaceName(subdistrict) : undefined,
+      landmark: landmark ? toTraditionalPlaceName(landmark) : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function reverseGeocodeStationPlace(
+  lat: number,
+  lon: number
+): Promise<ReverseGeocodePlace | null> {
+  const exactKey = `${lat.toFixed(4)}_${lon.toFixed(4)}`;
+  const cellKey = `${lat.toFixed(3)}_${lon.toFixed(3)}`;
+  if (reverseGeocodeCache.has(exactKey)) {
+    return reverseGeocodeCache.get(exactKey) ?? null;
+  }
+  const existingFlight = reverseGeocodeInFlight.get(exactKey);
+  if (existingFlight) return existingFlight;
+
+  const task = (async (): Promise<ReverseGeocodePlace | null> => {
+    const nom = await queryNominatimReverse(lat, lon);
+    let merged: ReverseGeocodePlace | null = nom ? { ...nom } : null;
+
+    if (!merged || (!merged.road && !merged.neighborhood && !merged.landmark)) {
+      const photon = await queryPhotonReverse(lat, lon);
+      if (photon) {
+        merged = {
+          road: merged?.road || photon.road,
+          neighborhood: merged?.neighborhood || photon.neighborhood,
+          subdistrict: merged?.subdistrict || photon.subdistrict,
+          landmark: merged?.landmark || photon.landmark,
+        };
+      }
+    }
+
+    if (merged && !merged.road && !merged.neighborhood && !merged.subdistrict && !merged.landmark) {
+      merged = null;
+    }
+
+    reverseGeocodeCache.set(exactKey, merged);
+    if (merged || !reverseGeocodeCellCache.has(cellKey)) {
+      reverseGeocodeCellCache.set(cellKey, merged);
+    }
+    reverseGeocodeInFlight.delete(exactKey);
+    return merged;
+  })();
+
+  reverseGeocodeInFlight.set(exactKey, task);
+  return task;
+}
+
+export function prefetchReverseGeocodePlace(
+  lat: number,
+  lon: number,
+  onReady?: () => void
+): void {
+  const exactKey = `${lat.toFixed(4)}_${lon.toFixed(4)}`;
+  if (reverseGeocodeCache.has(exactKey) || reverseGeocodeInFlight.has(exactKey)) return;
+  reverseGeocodeStationPlace(lat, lon).then((res) => {
+    if (res && onReady) onReady();
+  });
+}
+
+const localStreetsCache = new Map<string, RoadSegment[]>();
+const localStreetsInFlight = new Map<string, Promise<RoadSegment[]>>();
+
+/**
+ * Loads dense local OSM roads for a quantized 0.06° (~6.6km) tile anywhere in Shanghai/Jiangsu/Zhejiang
+ * so dense urban and county streets are immediately available for station auto-naming.
+ */
+export async function fetchLocalOverpassStreets(
+  lat: number,
+  lon: number,
+  bounds: GeoBounds,
+  mapWidth: number,
+  mapHeight: number
+): Promise<RoadSegment[]> {
+  const qLat = Math.round(lat / 0.06) * 0.06;
+  const qLon = Math.round(lon / 0.06) * 0.06;
+  const key = `${qLat.toFixed(2)}_${qLon.toFixed(2)}`;
+  const cached = localStreetsCache.get(key);
+  if (cached) return cached;
+  const inflight = localStreetsInFlight.get(key);
+  if (inflight) return inflight;
+
+  const dLat = 0.045;
+  const dLon = 0.055;
+  const query = `
+[out:json][timeout:10];
+(
+  way["highway"~"motorway|trunk|primary|secondary|tertiary|residential"]["name"](${qLat - dLat},${qLon - dLon},${qLat + dLat},${qLon + dLon});
+);
+out body 2200;
+>;
+out skel qt;
+`.trim();
+
+  const task = (async (): Promise<RoadSegment[]> => {
+    const endpoints = [
+      'https://overpass-api.de/api/interpreter',
+      'https://lz4.overpass-api.de/api/interpreter',
+    ];
+    for (const url of endpoints) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 7000);
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Accept: 'application/json',
+          },
+          body: `data=${encodeURIComponent(query)}`,
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        if (!res.ok) continue;
+
+        const json = (await res.json()) as {
+          elements: Array<{
+            type: 'node' | 'way';
+            id: number;
+            lat?: number;
+            lon?: number;
+            nodes?: number[];
+            tags?: Record<string, string>;
+          }>;
+        };
+
+        const nodeMap = new Map<number, { x: number; y: number }>();
+        for (const el of json.elements) {
+          if (el.type === 'node' && el.lat !== undefined && el.lon !== undefined) {
+            nodeMap.set(el.id, latLonToWorld(el.lat, el.lon, bounds, mapWidth, mapHeight));
+          }
+        }
+
+        const roads: RoadSegment[] = [];
+        for (const el of json.elements) {
+          if (el.type !== 'way' || !el.nodes || el.nodes.length < 2 || !el.tags?.highway) continue;
+          const rawName =
+            el.tags['name:zh-Hant'] ||
+            el.tags['name:zh-TW'] ||
+            el.tags['name:zh'] ||
+            el.tags.name ||
+            el.tags.ref ||
+            '';
+          if (!rawName) continue;
+          const roadName = toTraditionalPlaceName(rawName);
+          const isPrimary =
+            el.tags.highway === 'motorway' ||
+            el.tags.highway === 'trunk' ||
+            el.tags.highway === 'primary';
+          for (let i = 0; i < el.nodes.length - 1; i++) {
+            const p1 = nodeMap.get(el.nodes[i]);
+            const p2 = nodeMap.get(el.nodes[i + 1]);
+            if (!p1 || !p2) continue;
+            roads.push({
+              id: `osm_loc_${el.id}_${i}`,
+              name: roadName,
+              x1: p1.x,
+              y1: p1.y,
+              x2: p2.x,
+              y2: p2.y,
+              tier:
+                el.tags.highway === 'motorway'
+                  ? 'highway'
+                  : isPrimary
+                  ? 'arterial'
+                  : el.tags.highway === 'residential'
+                  ? 'local'
+                  : 'secondary',
+              isArterial: isPrimary,
+              capacity: el.tags.highway === 'motorway' ? 1800 : isPrimary ? 1200 : 800,
+              saturation: 0.14 + ((el.id % 25) / 100),
+            });
+          }
+        }
+
+        localStreetsCache.set(key, roads);
+        localStreetsInFlight.delete(key);
+        return roads;
+      } catch {
+        // try fallback mirror
+      }
+    }
+    localStreetsInFlight.delete(key);
+    return [];
+  })();
+
+  localStreetsInFlight.set(key, task);
+  return task;
+}
+
 
