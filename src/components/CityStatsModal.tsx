@@ -415,7 +415,8 @@ export const CityStatsModal: React.FC<CityStatsModalProps> = ({
                   </div>
                   <div className="text-[11px] text-slate-500 font-mono-tabular">
                     已開放 {map.districts.filter((d) => d.unlocked).length} / {map.districts.length} 區縣 ·{' '}
-                    {(map.cities ?? []).filter((c) => c.unlocked).length} / {(map.cities ?? []).length} 跨省城市
+                    {(map.cities ?? []).filter((c) => c.unlocked).length} / {(map.cities ?? []).length} 跨省城市 ·{' '}
+                    當前解鎖人口 <strong className="text-slate-800">{formatPop(stats.totalPopulation, lang)}</strong>
                   </div>
                 </div>
 
@@ -606,7 +607,12 @@ export const CityStatsModal: React.FC<CityStatsModalProps> = ({
                                       )}
                                       <span className="font-semibold text-slate-900">{city.name}</span>
                                       <span className="text-[11px] font-mono-tabular text-slate-400">
-                                        {unlockedDistCount}/{cityDistricts.length} 區 · {city.distanceKmFromShanghai} km
+                                        {unlockedDistCount}/{cityDistricts.length} 區 ·{' '}
+                                        {formatPop(
+                                          cityDistricts.reduce((s, d) => s + (d.realPopulation ?? 0), 0),
+                                          lang
+                                        )}{' '}
+                                        · {city.distanceKmFromShanghai} km
                                       </span>
                                       {city.isClosestToShanghai && (
                                         <span className="text-[10px] font-medium text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded">
@@ -684,6 +690,7 @@ export const CityStatsModal: React.FC<CityStatsModalProps> = ({
                                                   )}
                                                 </div>
                                                 <div className="text-[10px] text-slate-500 mt-0.5 font-mono-tabular">
+                                                  {d.realPopulation ? `人口 ${formatPop(d.realPopulation, lang)} · ` : ''}
                                                   成長 {d.growthMultiplier.toFixed(2)}x
                                                   {!d.unlocked && !distPrereq.canUnlock
                                                     ? ` · 需先解鎖${distPrereq.blockedByName}`
@@ -752,6 +759,7 @@ export const CityStatsModal: React.FC<CityStatsModalProps> = ({
                             <div className="flex items-center gap-2">
                               <span className="font-semibold text-slate-900 truncate">{d.name}</span>
                               <span className="text-[11px] font-mono-tabular text-slate-400">
+                                {d.realPopulation ? `${formatPop(d.realPopulation, lang)} · ` : ''}
                                 {d.growthMultiplier.toFixed(2)}x
                               </span>
                             </div>

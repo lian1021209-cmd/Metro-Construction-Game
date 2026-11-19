@@ -33,6 +33,9 @@ import {
 } from '../engine/simulation';
 import {
   buildCityRiversGeoJson,
+  buildPureLandGeoJson,
+  buildTieredRegionsGeoJson,
+  buildWaterPolygonsGeoJson,
   fetchLocalOverpassStreets,
   GeoBounds,
   getEsriDarkGrayStyle,
@@ -44,7 +47,6 @@ import {
   normYToLat,
   OpenMapStyleId,
   prefetchReverseGeocodePlace,
-  riverPathToPolygonRing,
   worldToLatLon,
 } from '../engine/geo';
 import { suggestStationName } from '../engine/noise';
@@ -447,45 +449,275 @@ function buildBaseMapCanvas(map: CityMap, isDark = false): HTMLCanvasElement {
   return off;
 }
 
+const exactRingBBoxCache = new WeakMap<
+  object,
+  { minX: number; maxX: number; minY: number; maxY: number }
+>();
+
+function getExactRingBBox(ring: { x: number; y: number }[]) {
+  const cached = exactRingBBoxCache.get(ring);
+  if (cached) return cached;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i < ring.length; i++) {
+    const pt = ring[i];
+    if (pt.x < minX) minX = pt.x;
+    if (pt.x > maxX) maxX = pt.x;
+    if (pt.y < minY) minY = pt.y;
+    if (pt.y > maxY) maxY = pt.y;
+  }
+  const box = { minX, maxX, minY, maxY };
+  exactRingBBoxCache.set(ring, box);
+  return box;
+}
+
 function getStyleForMapMode(styleId: OpenMapStyleId) {
   if (styleId === 'canvas_vector') return getPureCanvasGeoStyle();
   if (styleId === 'esri_dark_gray') return getEsriDarkGrayStyle();
   return getEsriLightGrayStyle();
 }
 
-/**
- * Adds GeoJSON polygon layers for city rivers directly inside MapLibre GL as pure vector water polygons.
- */
-function attachGeoJsonRiversToMapLibre(mlMap: maplibregl.Map, cityMap: CityMap, isDark: boolean) {
-  if (!cityMap.geoBounds) return;
-  const geoJson = buildCityRiversGeoJson(cityMap);
-  if (geoJson.features.length === 0) return;
-
-  if (!mlMap.getSource('city-rivers-geojson')) {
-    mlMap.addSource('city-rivers-geojson', {
-      type: 'geojson',
-      data: geoJson as unknown as maplibregl.GeoJSONSourceSpecification['data'],
-    });
+function upsertGeoJsonSource(
+  mlMap: maplibregl.Map,
+  sourceId: string,
+  data: unknown,
+  opts?: { promoteId?: string; tolerance?: number }
+): boolean {
+  const existing = mlMap.getSource(sourceId) as maplibregl.GeoJSONSource | undefined;
+  if (existing && typeof existing.setData === 'function') {
+    existing.setData(data as maplibregl.GeoJSONSourceSpecification['data']);
+    return false;
   }
-  if (!mlMap.getLayer('city-rivers-casing')) {
+  mlMap.addSource(sourceId, {
+    type: 'geojson',
+    data: data as maplibregl.GeoJSONSourceSpecification['data'],
+    ...(opts?.promoteId ? { promoteId: opts.promoteId } : {}),
+    ...(opts?.tolerance !== undefined ? { tolerance: opts.tolerance } : {}),
+  });
+  return true;
+}
+
+/**
+ * Syncs WebGL GeoJSON layers for pure vector land/water fallback AND 3-tier progressive
+ * administrative boundaries/masks directly inside MapLibre GL (zero zoom/pitch polygon tearing).
+ */
+function syncMapLibreVectorLayers(
+  mlMap: maplibregl.Map,
+  cityMap: CityMap,
+  styleId: OpenMapStyleId,
+  isFallback: boolean
+) {
+  if (!cityMap.geoBounds || !mlMap.isStyleLoaded()) return;
+
+  const isDark = styleId === 'esri_dark_gray';
+  const useVectorBase = isFallback || styleId === 'canvas_vector';
+
+  if (useVectorBase) {
+    const landData = buildPureLandGeoJson(cityMap);
+    if (landData.features.length > 0) {
+      upsertGeoJsonSource(mlMap, 'pure-land-geojson', landData, { tolerance: 0.12 });
+      if (!mlMap.getLayer('pure-land-fill')) {
+        mlMap.addLayer({
+          id: 'pure-land-fill',
+          type: 'fill',
+          source: 'pure-land-geojson',
+          paint: {
+            'fill-color': isDark ? '#1E2530' : '#FFFFFF',
+            'fill-opacity': 1,
+          },
+        });
+      }
+      if (!mlMap.getLayer('pure-land-coast')) {
+        mlMap.addLayer({
+          id: 'pure-land-coast',
+          type: 'line',
+          source: 'pure-land-geojson',
+          paint: {
+            'line-color': isDark ? 'rgba(51, 65, 85, 0.55)' : 'rgba(148, 163, 184, 0.35)',
+            'line-width': 0.9,
+          },
+        });
+      }
+    }
+
+    const waterPolys = buildWaterPolygonsGeoJson(cityMap);
+    if (waterPolys.features.length > 0) {
+      upsertGeoJsonSource(mlMap, 'city-water-polygons-geojson', waterPolys, { tolerance: 0.1 });
+      if (!mlMap.getLayer('city-water-polygons-fill')) {
+        mlMap.addLayer({
+          id: 'city-water-polygons-fill',
+          type: 'fill',
+          source: 'city-water-polygons-geojson',
+          paint: {
+            'fill-color': isDark ? '#091322' : '#CBE0F0',
+            'fill-opacity': 0.98,
+          },
+        });
+      }
+      if (!mlMap.getLayer('city-water-polygons-line')) {
+        mlMap.addLayer({
+          id: 'city-water-polygons-line',
+          type: 'line',
+          source: 'city-water-polygons-geojson',
+          paint: {
+            'line-color': isDark ? '#18385E' : '#9EC1DC',
+            'line-width': 1.2,
+          },
+        });
+      }
+    }
+
+    const riversData = buildCityRiversGeoJson(cityMap);
+    if (riversData.features.length > 0) {
+      upsertGeoJsonSource(mlMap, 'city-rivers-geojson', riversData, { tolerance: 0.12 });
+      if (!mlMap.getLayer('city-rivers-casing')) {
+        mlMap.addLayer({
+          id: 'city-rivers-casing',
+          type: 'line',
+          source: 'city-rivers-geojson',
+          paint: {
+            'line-color': isDark ? '#18385E' : '#9EC1DC',
+            'line-width': 2.0,
+          },
+        });
+      }
+      if (!mlMap.getLayer('city-rivers-fill')) {
+        mlMap.addLayer({
+          id: 'city-rivers-fill',
+          type: 'fill',
+          source: 'city-rivers-geojson',
+          paint: {
+            'fill-color': isDark ? '#061830' : '#CBE0F0',
+            'fill-opacity': 0.96,
+          },
+        });
+      }
+    }
+  }
+
+  const regionsData = buildTieredRegionsGeoJson(
+    cityMap,
+    (city) => getCityUnlockPrereq(cityMap, city).canUnlock,
+    (dist) => getDistrictUnlockPrereq(cityMap, dist).canUnlock
+  );
+
+  upsertGeoJsonSource(mlMap, 'city-regions-geojson', regionsData, {
+    promoteId: 'regionId',
+    tolerance: 0.1,
+  });
+
+  if (!mlMap.getLayer('city-regions-fill')) {
     mlMap.addLayer({
-      id: 'city-rivers-casing',
-      type: 'line',
-      source: 'city-rivers-geojson',
+      id: 'city-regions-fill',
+      type: 'fill',
+      source: 'city-regions-geojson',
       paint: {
-        'line-color': isDark ? '#18385E' : '#9EC1DC',
-        'line-width': 2.5,
+        'fill-color': [
+          'case',
+          ['==', ['get', 'tier'], 1],
+          [
+            'case',
+            ['boolean', ['feature-state', 'hover'], false],
+            isDark ? 'rgba(15, 23, 42, 0.56)' : 'rgba(15, 23, 42, 0.22)',
+            isDark ? 'rgba(3, 6, 12, 0.74)' : 'rgba(15, 23, 42, 0.32)',
+          ],
+          ['==', ['get', 'tier'], 2],
+          [
+            'case',
+            ['boolean', ['feature-state', 'hover'], false],
+            isDark ? 'rgba(18, 26, 40, 0.48)' : 'rgba(15, 23, 42, 0.16)',
+            ['==', ['get', 'canUnlock'], true],
+            isDark ? 'rgba(4, 8, 16, 0.62)' : 'rgba(15, 23, 42, 0.20)',
+            isDark ? 'rgba(4, 8, 16, 0.62)' : 'rgba(15, 23, 42, 0.28)',
+          ],
+          [
+            'case',
+            ['boolean', ['feature-state', 'hover'], false],
+            isDark ? 'rgba(18, 24, 34, 0.44)' : 'rgba(15, 23, 42, 0.14)',
+            isDark ? 'rgba(4, 7, 13, 0.56)' : 'rgba(15, 23, 42, 0.20)',
+          ],
+        ],
+        'fill-opacity': ['case', ['==', ['get', 'unlocked'], true], 0, 1],
       },
     });
   }
-  if (!mlMap.getLayer('city-rivers-fill')) {
+
+  if (!mlMap.getLayer('city-regions-line-unlocked')) {
     mlMap.addLayer({
-      id: 'city-rivers-fill',
-      type: 'fill',
-      source: 'city-rivers-geojson',
+      id: 'city-regions-line-unlocked',
+      type: 'line',
+      source: 'city-regions-geojson',
+      filter: ['==', ['get', 'unlocked'], true],
       paint: {
-        'fill-color': isDark ? '#061830' : '#CBE0F0',
-        'fill-opacity': 0.96,
+        'line-color': [
+          'case',
+          ['==', ['get', 'isStarter'], true],
+          isDark ? 'rgba(148, 163, 184, 0.28)' : 'rgba(15, 23, 42, 0.24)',
+          isDark ? 'rgba(56, 189, 248, 0.36)' : 'rgba(37, 99, 235, 0.40)',
+        ],
+        'line-width': 1.1,
+      },
+    });
+  }
+
+  if (!mlMap.getLayer('city-regions-line-locked-dashed')) {
+    mlMap.addLayer({
+      id: 'city-regions-line-locked-dashed',
+      type: 'line',
+      source: 'city-regions-geojson',
+      filter: ['==', ['get', 'unlocked'], false],
+      paint: {
+        'line-dasharray': [5, 4],
+        'line-color': [
+          'case',
+          ['==', ['get', 'tier'], 1],
+          isDark ? 'rgba(148, 163, 184, 0.36)' : 'rgba(15, 23, 42, 0.42)',
+          ['==', ['get', 'tier'], 2],
+          [
+            'case',
+            ['==', ['get', 'canUnlock'], true],
+            isDark ? 'rgba(251, 191, 36, 0.45)' : 'rgba(217, 119, 6, 0.55)',
+            isDark ? 'rgba(148, 163, 184, 0.24)' : 'rgba(15, 23, 42, 0.30)',
+          ],
+          isDark ? 'rgba(148, 163, 184, 0.32)' : 'rgba(15, 23, 42, 0.34)',
+        ],
+        'line-width': [
+          'case',
+          ['==', ['get', 'tier'], 1],
+          1.5,
+          ['all', ['==', ['get', 'tier'], 2], ['==', ['get', 'canUnlock'], true]],
+          1.4,
+          1.05,
+        ],
+        'line-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 0, 1],
+      },
+    });
+  }
+
+  if (!mlMap.getLayer('city-regions-line-locked-hover')) {
+    mlMap.addLayer({
+      id: 'city-regions-line-locked-hover',
+      type: 'line',
+      source: 'city-regions-geojson',
+      filter: ['==', ['get', 'unlocked'], false],
+      paint: {
+        'line-color': [
+          'case',
+          ['==', ['get', 'tier'], 3],
+          isDark ? 'rgba(251, 191, 36, 0.85)' : '#D97706',
+          '#D97706',
+        ],
+        'line-width': [
+          'case',
+          ['==', ['get', 'tier'], 1],
+          2.2,
+          ['==', ['get', 'tier'], 2],
+          2.0,
+          1.8,
+        ],
+        'line-opacity': ['case', ['boolean', ['feature-state', 'hover'], false], 1, 0],
       },
     });
   }
@@ -541,6 +773,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       { kind: 'province' | 'city' | 'district'; id: string; x1: number; y1: number; x2: number; y2: number }[]
     >([]);
     const hoveredDistrictRef = useRef<string | null>(null);
+    const prevHoveredRegionRef = useRef<string | null>(null);
     const [isHoveringDistrict, setIsHoveringDistrict] = useState(false);
     const hoverPrefetchTimerRef = useRef<number | null>(null);
     const lastPrefetchKeyRef = useRef<string>('');
@@ -635,13 +868,13 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       });
 
       mlMap.on('style.load', () => {
-        if (pureVectorFallbackRef.current || uiRef.current.openMapStyle === 'canvas_vector') {
-          attachGeoJsonRiversToMapLibre(
-            mlMap,
-            simDataRef.current.map,
-            uiRef.current.openMapStyle === 'esri_dark_gray'
-          );
-        }
+        prevHoveredRegionRef.current = null;
+        syncMapLibreVectorLayers(
+          mlMap,
+          simDataRef.current.map,
+          uiRef.current.openMapStyle,
+          pureVectorFallbackRef.current
+        );
       });
 
       mlMap.on('error', () => {
@@ -655,7 +888,16 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
 
       mlMapRef.current = mlMap;
 
+      let resizeObserver: ResizeObserver | null = null;
+      if (typeof ResizeObserver !== 'undefined' && containerRef.current) {
+        resizeObserver = new ResizeObserver(() => {
+          mlMap.resize();
+        });
+        resizeObserver.observe(containerRef.current);
+      }
+
       return () => {
+        if (resizeObserver) resizeObserver.disconnect();
         mlMap.remove();
         mlMapRef.current = null;
       };
@@ -668,6 +910,20 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       pureVectorFallbackRef.current = openMapStyle === 'canvas_vector';
       mlMap.setStyle(getStyleForMapMode(openMapStyle));
     }, [openMapStyle]);
+
+    // Sync MapLibre 3-tier administrative GeoJSON polygons whenever map unlocks change
+    useEffect(() => {
+      const mlMap = mlMapRef.current;
+      if (!mlMap || !simDataRef.current.map.geoBounds) return;
+      if (!mlMap.isStyleLoaded()) return;
+      prevHoveredRegionRef.current = null;
+      syncMapLibreVectorLayers(
+        mlMap,
+        simDataRef.current.map,
+        openMapStyle,
+        pureVectorFallbackRef.current
+      );
+    }, [mapSeedKey, mapVersion, openMapStyle]);
 
     // Sync 2D / 2.5D pitch & bearing
     useEffect(() => {
@@ -871,22 +1127,53 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
             if (geo && mlMap) {
               const p0 = proj(st.map.width * 0.5, st.map.height * 0.5);
               const p1 = proj(st.map.width * 0.5 + 100, st.map.height * 0.5);
-              pxScale = Math.max(0.14, Math.hypot(p1.x - p0.x, p1.y - p0.y) / 100);
+              const stepDist = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+              pxScale = Number.isFinite(stepDist) ? Math.max(0.14, stepDist / 100) : 1;
               zoomRatio = Math.pow(2, mlMap.getZoom() - geo.defaultZoom);
+
+              const centerLL = mlMap.unproject([w * 0.5, h * 0.5]);
+              const centerW =
+                Number.isFinite(centerLL.lat) && Number.isFinite(centerLL.lng)
+                  ? latLonToWorld(centerLL.lat, centerLL.lng, geo, st.map.width, st.map.height)
+                  : { x: st.map.width * 0.5, y: st.map.height * 0.5 };
+              const maxSpan = Math.max(
+                st.map.width * 1.4,
+                (Math.max(w, h) / Math.max(0.08, pxScale)) * 2.6
+              );
 
               const corners = [
                 mlMap.unproject([0, 0]),
                 mlMap.unproject([w, 0]),
                 mlMap.unproject([0, h]),
                 mlMap.unproject([w, h]),
-              ].map((ll) => latLonToWorld(ll.lat, ll.lng, geo, st.map.width, st.map.height));
-              visMinX = Math.min(...corners.map((c) => c.x)) - 220;
-              visMaxX = Math.max(...corners.map((c) => c.x)) + 220;
-              visMinY = Math.min(...corners.map((c) => c.y)) - 220;
-              visMaxY = Math.max(...corners.map((c) => c.y)) + 220;
+              ]
+                .filter((ll) => Number.isFinite(ll.lat) && Number.isFinite(ll.lng))
+                .map((ll) => latLonToWorld(ll.lat, ll.lng, geo, st.map.width, st.map.height))
+                .map((c) => ({
+                  x: Math.max(centerW.x - maxSpan, Math.min(centerW.x + maxSpan, c.x)),
+                  y: Math.max(centerW.y - maxSpan, Math.min(centerW.y + maxSpan, c.y)),
+                }));
+
+              if (corners.length > 0) {
+                visMinX = Math.min(...corners.map((c) => c.x)) - 220;
+                visMaxX = Math.max(...corners.map((c) => c.x)) + 220;
+                visMinY = Math.min(...corners.map((c) => c.y)) - 220;
+                visMaxY = Math.max(...corners.map((c) => c.y)) + 220;
+              } else {
+                visMinX = centerW.x - maxSpan;
+                visMaxX = centerW.x + maxSpan;
+                visMinY = centerW.y - maxSpan;
+                visMaxY = centerW.y + maxSpan;
+              }
             }
 
-            // 1. Non-geo base terrain canvas OR Pure Canvas GeoJSON River Polygon fallback (if Esri fails / offline)
+            const isSaneScreenPt = (pt: { x: number; y: number }) =>
+              Number.isFinite(pt.x) &&
+              Number.isFinite(pt.y) &&
+              Math.abs(pt.x) < w * 6 + 4000 &&
+              Math.abs(pt.y) < h * 6 + 4000;
+
+            // 1. Non-geo base terrain canvas OR Pure Canvas GeoJSON River Labels + Streets (polygons live on MapLibre WebGL)
             if (!isGeoActive && baseMapCanvasRef.current) {
               ctx.save();
               ctx.translate(cam.x, cam.y);
@@ -894,91 +1181,24 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               ctx.drawImage(baseMapCanvasRef.current, 0, 0);
               ctx.restore();
             } else if (isGeoActive && pureVectorFallbackRef.current) {
-              // Pure canvas land silhouette + GeoJSON river & lake polygons (viewport culled)
-              ctx.save();
-              for (const d of st.map.districts) {
-                const rings = d.polygons ?? (d.polygon ? [d.polygon] : []);
-                for (const ring of rings) {
-                  if (ring.length < 3) continue;
-                  let rMinX = Infinity, rMaxX = -Infinity, rMinY = Infinity, rMaxY = -Infinity;
-                  for (let i = 0; i < ring.length; i += Math.max(1, Math.floor(ring.length / 16))) {
-                    const pt = ring[i];
-                    if (pt.x < rMinX) rMinX = pt.x;
-                    if (pt.x > rMaxX) rMaxX = pt.x;
-                    if (pt.y < rMinY) rMinY = pt.y;
-                    if (pt.y > rMaxY) rMaxY = pt.y;
-                  }
-                  if (rMaxX < visMinX || rMinX > visMaxX || rMaxY < visMinY || rMinY > visMaxY) continue;
-                  ctx.beginPath();
-                  ring.forEach((pt, idx) => {
-                    const sp = proj(pt.x, pt.y);
-                    if (idx === 0) ctx.moveTo(sp.x, sp.y);
-                    else ctx.lineTo(sp.x, sp.y);
-                  });
-                  ctx.closePath();
-                  ctx.fillStyle = isDarkMap ? '#1E2530' : '#FFFFFF';
-                  ctx.fill();
-                }
-              }
-              if (st.map.waterPolygons) {
-                for (const lake of st.map.waterPolygons) {
-                  if (lake.points.length < 3) continue;
-                  ctx.beginPath();
-                  lake.points.forEach((pt, idx) => {
-                    const sp = proj(pt.x, pt.y);
-                    if (idx === 0) ctx.moveTo(sp.x, sp.y);
-                    else ctx.lineTo(sp.x, sp.y);
-                  });
-                  ctx.closePath();
-                  ctx.fillStyle = isDarkMap ? '#091322' : '#CBE0F0';
-                  ctx.fill();
-                }
-              }
-              ctx.restore();
-
+              // River name labels over MapLibre WebGL rivers
               for (const rv of st.map.rivers) {
-                if (rv.skipPolylineWaterCheck) {
-                  const mid = rv.points[Math.floor(rv.points.length / 2)];
-                  if (mid) {
-                    const msp = proj(mid.x, mid.y);
-                    ctx.save();
-                    ctx.font = '500 12px "Noto Sans TC", sans-serif';
-                    ctx.fillStyle = isDarkMap ? 'rgba(148, 163, 184, 0.45)' : 'rgba(51, 65, 85, 0.55)';
-                    ctx.textAlign = 'center';
-                    ctx.textBaseline = 'middle';
-                    ctx.fillText(rv.name, msp.x, msp.y);
-                    ctx.restore();
-                  }
+                const mid = rv.points[Math.floor(rv.points.length / 2)];
+                if (!mid) continue;
+                const msp = proj(mid.x, mid.y);
+                if (!isSaneScreenPt(msp) || msp.x < -120 || msp.x > w + 120 || msp.y < -120 || msp.y > h + 120) {
                   continue;
                 }
-                const poly = riverPathToPolygonRing(rv);
-                if (poly.length >= 4) {
-                  ctx.save();
-                  ctx.beginPath();
-                  poly.forEach((pt, idx) => {
-                    const sp = proj(pt.x, pt.y);
-                    if (idx === 0) ctx.moveTo(sp.x, sp.y);
-                    else ctx.lineTo(sp.x, sp.y);
-                  });
-                  ctx.closePath();
-                  ctx.fillStyle = isDarkMap ? 'rgba(11, 20, 34, 0.96)' : '#CBE0F0';
-                  ctx.fill();
-                  ctx.strokeStyle = isDarkMap ? 'rgba(34, 48, 68, 0.9)' : '#9EC1DC';
-                  ctx.lineWidth = 1.5;
-                  ctx.stroke();
-
-                  const mid = rv.points[Math.floor(rv.points.length / 2)];
-                  const msp = proj(mid.x, mid.y);
-                  ctx.font = '500 12px "Noto Sans TC", sans-serif';
-                  ctx.fillStyle = isDarkMap ? 'rgba(148, 163, 184, 0.45)' : 'rgba(51, 65, 85, 0.55)';
-                  ctx.textAlign = 'center';
-                  ctx.textBaseline = 'middle';
-                  ctx.fillText(rv.name, msp.x, msp.y);
-                  ctx.restore();
-                }
+                ctx.save();
+                ctx.font = '500 12px "Noto Sans TC", sans-serif';
+                ctx.fillStyle = isDarkMap ? 'rgba(148, 163, 184, 0.45)' : 'rgba(51, 65, 85, 0.55)';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(rv.name, msp.x, msp.y);
+                ctx.restore();
               }
 
-              // Draw real streets cleanly on pure vector canvas
+              // Crisp real streets over WebGL land base
               ctx.save();
               ctx.strokeStyle = isDarkMap ? 'rgba(98, 105, 115, 0.55)' : 'rgba(148, 163, 184, 0.36)';
               ctx.lineWidth = 1.3;
@@ -993,6 +1213,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                 }
                 const p1 = proj(road.x1, road.y1);
                 const p2 = proj(road.x2, road.y2);
+                if (!isSaneScreenPt(p1) || !isSaneScreenPt(p2)) continue;
                 ctx.beginPath();
                 ctx.moveTo(p1.x, p1.y);
                 ctx.lineTo(p2.x, p2.y);
@@ -1089,6 +1310,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               if (!isHovered && !isCongested && !showFreeFlowHint) continue;
 
               const screenPts = pts.map((pt) => proj(pt.x, pt.y));
+              if (screenPts.some((p) => !isSaneScreenPt(p))) continue;
               ctx.beginPath();
               traceRoadPoints(ctx, screenPts);
 
@@ -1233,22 +1455,21 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               let minY = Infinity;
               let maxY = -Infinity;
               for (const ring of rings) {
-                for (let i = 0; i < ring.length; i += Math.max(1, Math.floor(ring.length / 24))) {
-                  const pt = ring[i];
-                  if (pt.x < minX) minX = pt.x;
-                  if (pt.x > maxX) maxX = pt.x;
-                  if (pt.y < minY) minY = pt.y;
-                  if (pt.y > maxY) maxY = pt.y;
-                }
+                if (ring.length === 0) continue;
+                const box = getExactRingBBox(ring);
+                if (box.minX < minX) minX = box.minX;
+                if (box.maxX > maxX) maxX = box.maxX;
+                if (box.minY < minY) minY = box.minY;
+                if (box.maxY > maxY) maxY = box.maxY;
               }
               return !(maxX < visMinX || minX > visMaxX || maxY < visMinY || minY > visMaxY);
             };
 
-            const traceWorldRings = (rings: { x: number; y: number }[][], stride = 1) => {
+            const traceWorldRings = (rings: { x: number; y: number }[][]) => {
               ctx.beginPath();
               for (const ring of rings) {
                 if (ring.length < 3) continue;
-                for (let i = 0; i < ring.length; i += stride) {
+                for (let i = 0; i < ring.length; i++) {
                   const sp = proj(ring[i].x, ring[i].y);
                   if (i === 0) ctx.moveTo(sp.x, sp.y);
                   else ctx.lineTo(sp.x, sp.y);
@@ -1257,112 +1478,114 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               }
             };
 
-            const vertexStride = zoomRatio < 0.14 ? 3 : zoomRatio < 0.35 ? 2 : 1;
+            // When MapLibre WebGL is active, city-regions-geojson renders all Tier 1/2/3 fills & strokes with zero zoom tearing.
+            // Keep Canvas 2D polygon rendering only for non-geo procedural cities (with exact bboxes & full stride=1 precision).
+            if (!isGeoActive) {
+              // Tier 1: Locked Provinces
+              for (const prov of st.map.provinces ?? []) {
+                if (prov.unlocked) continue;
+                const rings = prov.polygons ?? [];
+                if (rings.length === 0 || !ringsIntersectView(rings)) continue;
+                const isHovered = hoveredDistrictRef.current === prov.id;
 
-            // Tier 1: Locked Provinces — draw ONLY outer provincial boundary with ZERO internal city/district lines
-            for (const prov of st.map.provinces ?? []) {
-              if (prov.unlocked) continue;
-              const rings = prov.polygons ?? [];
-              if (rings.length === 0 || !ringsIntersectView(rings)) continue;
-              const isHovered = hoveredDistrictRef.current === prov.id;
-
-              ctx.save();
-              traceWorldRings(rings, vertexStride);
-              ctx.fillStyle = isDarkMap
-                ? isHovered
-                  ? 'rgba(15, 23, 42, 0.56)'
-                  : 'rgba(3, 6, 12, 0.74)'
-                : isHovered
-                ? 'rgba(15, 23, 42, 0.22)'
-                : 'rgba(15, 23, 42, 0.32)';
-              ctx.fill();
-              ctx.setLineDash(isHovered ? [] : [9, 6]);
-              ctx.strokeStyle = isHovered
-                ? '#D97706'
-                : isDarkMap
-                ? 'rgba(148, 163, 184, 0.36)'
-                : 'rgba(15, 23, 42, 0.42)';
-              ctx.lineWidth = isHovered ? 2.2 : 1.5;
-              ctx.stroke();
-              ctx.setLineDash([]);
-              ctx.restore();
-            }
-
-            // Tier 2: Unlocked Province + Locked Cities — draw ONLY outer city boundary with ZERO internal district lines
-            for (const city of st.map.cities ?? []) {
-              if (city.unlocked) continue;
-              if (!provUnlockedMap.get(city.provinceId)) continue;
-              const rings = city.polygons ?? [];
-              if (rings.length === 0 || !ringsIntersectView(rings)) continue;
-              const isHovered = hoveredDistrictRef.current === city.id;
-              const prereq = getCityUnlockPrereq(st.map, city);
-
-              ctx.save();
-              traceWorldRings(rings, vertexStride);
-              ctx.fillStyle = isDarkMap
-                ? isHovered
-                  ? 'rgba(18, 26, 40, 0.48)'
-                  : 'rgba(4, 8, 16, 0.62)'
-                : isHovered
-                ? 'rgba(15, 23, 42, 0.16)'
-                : prereq.canUnlock
-                ? 'rgba(15, 23, 42, 0.20)'
-                : 'rgba(15, 23, 42, 0.28)';
-              ctx.fill();
-              ctx.setLineDash(isHovered ? [] : [7, 5]);
-              ctx.strokeStyle = isHovered
-                ? '#D97706'
-                : prereq.canUnlock
-                ? isDarkMap
-                  ? 'rgba(251, 191, 36, 0.45)'
-                  : 'rgba(217, 119, 6, 0.55)'
-                : isDarkMap
-                ? 'rgba(148, 163, 184, 0.24)'
-                : 'rgba(15, 23, 42, 0.30)';
-              ctx.lineWidth = isHovered ? 2.0 : prereq.canUnlock ? 1.4 : 1.05;
-              ctx.stroke();
-              ctx.setLineDash([]);
-              ctx.restore();
-            }
-
-            // Tier 3: Shanghai & Districts inside Unlocked Cities — full survey-grade district boundaries
-            for (const d of st.map.districts) {
-              const isShanghaiDist = !d.provinceId || d.provinceId === 'prov_sh';
-              const provUnlocked = isShanghaiDist || Boolean(provUnlockedMap.get(d.provinceId!));
-              const cityUnlocked = isShanghaiDist || !d.cityId || Boolean(cityUnlockedMap.get(d.cityId));
-              if (!provUnlocked || !cityUnlocked) continue;
-
-              const rings = d.polygons ?? (d.polygon ? [d.polygon] : []);
-              if (rings.length === 0 || !ringsIntersectView(rings)) continue;
-
-              const isHovered = hoveredDistrictRef.current === d.id;
-
-              ctx.save();
-              traceWorldRings(rings, 1);
-
-              if (!d.unlocked) {
+                ctx.save();
+                traceWorldRings(rings);
                 ctx.fillStyle = isDarkMap
                   ? isHovered
-                    ? 'rgba(18, 24, 34, 0.44)'
-                    : 'rgba(4, 7, 13, 0.56)'
+                    ? 'rgba(15, 23, 42, 0.56)'
+                    : 'rgba(3, 6, 12, 0.74)'
                   : isHovered
-                  ? 'rgba(15, 23, 42, 0.14)'
-                  : 'rgba(15, 23, 42, 0.20)';
+                  ? 'rgba(15, 23, 42, 0.22)'
+                  : 'rgba(15, 23, 42, 0.32)';
                 ctx.fill();
+                ctx.setLineDash(isHovered ? [] : [9, 6]);
+                ctx.strokeStyle = isHovered
+                  ? '#D97706'
+                  : isDarkMap
+                  ? 'rgba(148, 163, 184, 0.36)'
+                  : 'rgba(15, 23, 42, 0.42)';
+                ctx.lineWidth = isHovered ? 2.2 : 1.5;
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.restore();
               }
 
-              ctx.setLineDash(isHovered ? [] : [6, 4]);
-              ctx.strokeStyle = !d.unlocked
-                ? isHovered
-                  ? isDarkMap ? 'rgba(251, 191, 36, 0.85)' : '#D97706'
-                  : isDarkMap ? 'rgba(148, 163, 184, 0.32)' : 'rgba(15, 23, 42, 0.34)'
-                : d.isStarter
-                ? isDarkMap ? 'rgba(148, 163, 184, 0.28)' : 'rgba(15, 23, 42, 0.24)'
-                : isDarkMap ? 'rgba(56, 189, 248, 0.36)' : 'rgba(37, 99, 235, 0.40)';
-              ctx.lineWidth = isHovered ? 1.8 : 1.1;
-              ctx.stroke();
-              ctx.setLineDash([]);
-              ctx.restore();
+              // Tier 2: Unlocked Province + Locked Cities
+              for (const city of st.map.cities ?? []) {
+                if (city.unlocked) continue;
+                if (!provUnlockedMap.get(city.provinceId)) continue;
+                const rings = city.polygons ?? [];
+                if (rings.length === 0 || !ringsIntersectView(rings)) continue;
+                const isHovered = hoveredDistrictRef.current === city.id;
+                const prereq = getCityUnlockPrereq(st.map, city);
+
+                ctx.save();
+                traceWorldRings(rings);
+                ctx.fillStyle = isDarkMap
+                  ? isHovered
+                    ? 'rgba(18, 26, 40, 0.48)'
+                    : 'rgba(4, 8, 16, 0.62)'
+                  : isHovered
+                  ? 'rgba(15, 23, 42, 0.16)'
+                  : prereq.canUnlock
+                  ? 'rgba(15, 23, 42, 0.20)'
+                  : 'rgba(15, 23, 42, 0.28)';
+                ctx.fill();
+                ctx.setLineDash(isHovered ? [] : [7, 5]);
+                ctx.strokeStyle = isHovered
+                  ? '#D97706'
+                  : prereq.canUnlock
+                  ? isDarkMap
+                    ? 'rgba(251, 191, 36, 0.45)'
+                    : 'rgba(217, 119, 6, 0.55)'
+                  : isDarkMap
+                  ? 'rgba(148, 163, 184, 0.24)'
+                  : 'rgba(15, 23, 42, 0.30)';
+                ctx.lineWidth = isHovered ? 2.0 : prereq.canUnlock ? 1.4 : 1.05;
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.restore();
+              }
+
+              // Tier 3: Shanghai & Districts inside Unlocked Cities
+              for (const d of st.map.districts) {
+                const isShanghaiDist = !d.provinceId || d.provinceId === 'prov_sh';
+                const provUnlocked = isShanghaiDist || Boolean(provUnlockedMap.get(d.provinceId!));
+                const cityUnlocked = isShanghaiDist || !d.cityId || Boolean(cityUnlockedMap.get(d.cityId));
+                if (!provUnlocked || !cityUnlocked) continue;
+
+                const rings = d.polygons ?? (d.polygon ? [d.polygon] : []);
+                if (rings.length === 0 || !ringsIntersectView(rings)) continue;
+
+                const isHovered = hoveredDistrictRef.current === d.id;
+
+                ctx.save();
+                traceWorldRings(rings);
+
+                if (!d.unlocked) {
+                  ctx.fillStyle = isDarkMap
+                    ? isHovered
+                      ? 'rgba(18, 24, 34, 0.44)'
+                      : 'rgba(4, 7, 13, 0.56)'
+                    : isHovered
+                    ? 'rgba(15, 23, 42, 0.14)'
+                    : 'rgba(15, 23, 42, 0.20)';
+                  ctx.fill();
+                }
+
+                ctx.setLineDash(isHovered ? [] : [6, 4]);
+                ctx.strokeStyle = !d.unlocked
+                  ? isHovered
+                    ? isDarkMap ? 'rgba(251, 191, 36, 0.85)' : '#D97706'
+                    : isDarkMap ? 'rgba(148, 163, 184, 0.32)' : 'rgba(15, 23, 42, 0.34)'
+                  : d.isStarter
+                  ? isDarkMap ? 'rgba(148, 163, 184, 0.28)' : 'rgba(15, 23, 42, 0.24)'
+                  : isDarkMap ? 'rgba(56, 189, 248, 0.36)' : 'rgba(37, 99, 235, 0.40)';
+                ctx.lineWidth = isHovered ? 1.8 : 1.1;
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.restore();
+              }
             }
 
             const drawLockBadge = (
@@ -1649,6 +1872,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                   const sp = proj(ptW.x, ptW.y);
                   screenPts.push({ x: sp.x, y: sp.y + zOff });
                 }
+                if (screenPts.some((p) => !isSaneScreenPt(p))) continue;
 
                 ctx.save();
                 ctx.globalAlpha = dimmed ? 0.14 : seg?.isDraft ? 0.78 : 1;
@@ -1729,28 +1953,35 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                 const ctrlY = st.trackWaypoint ? st.trackWaypoint.y : (startSt.y + endY) / 2;
 
                 const activeLine = st.lines.find((l) => l.id === st.activeLineId);
-                ctx.save();
-                ctx.beginPath();
+                const previewPts: { x: number; y: number }[] = [];
                 for (let s = 0; s <= 12; s++) {
                   const pW = evalQuadraticBezier(startSt.x, startSt.y, ctrlX, ctrlY, endX, endY, s / 12);
-                  const sp = proj(pW.x, pW.y);
-                  if (s === 0) ctx.moveTo(sp.x, sp.y);
-                  else ctx.lineTo(sp.x, sp.y);
+                  previewPts.push(proj(pW.x, pW.y));
                 }
-                ctx.setLineDash([8, 6]);
-                ctx.strokeStyle = activeLine ? activeLine.color : '#38BDF8';
-                ctx.lineWidth = 4;
-                ctx.stroke();
-                ctx.setLineDash([]);
-
-                if (st.trackWaypoint) {
-                  const cp = proj(ctrlX, ctrlY);
+                if (!previewPts.some((p) => !isSaneScreenPt(p))) {
+                  ctx.save();
                   ctx.beginPath();
-                  ctx.arc(cp.x, cp.y, 5, 0, Math.PI * 2);
-                  ctx.fillStyle = '#FACC15';
-                  ctx.fill();
+                  previewPts.forEach((sp, s) => {
+                    if (s === 0) ctx.moveTo(sp.x, sp.y);
+                    else ctx.lineTo(sp.x, sp.y);
+                  });
+                  ctx.setLineDash([8, 6]);
+                  ctx.strokeStyle = activeLine ? activeLine.color : '#38BDF8';
+                  ctx.lineWidth = 4;
+                  ctx.stroke();
+                  ctx.setLineDash([]);
+
+                  if (st.trackWaypoint) {
+                    const cp = proj(ctrlX, ctrlY);
+                    if (isSaneScreenPt(cp)) {
+                      ctx.beginPath();
+                      ctx.arc(cp.x, cp.y, 5, 0, Math.PI * 2);
+                      ctx.fillStyle = '#FACC15';
+                      ctx.fill();
+                    }
+                  }
+                  ctx.restore();
                 }
-                ctx.restore();
               }
             }
 
@@ -2108,7 +2339,14 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               if (geo && mlMap) {
                 const ll1 = mlMap.unproject([w * 0.5, h * 0.5]);
                 const ll2 = mlMap.unproject([w * 0.5 + 100, h * 0.5]);
-                kmPerScreenPx = Math.max(0.0001, haversineKm(ll1.lat, ll1.lng, ll2.lat, ll2.lng) / 100);
+                if (
+                  Number.isFinite(ll1.lat) &&
+                  Number.isFinite(ll1.lng) &&
+                  Number.isFinite(ll2.lat) &&
+                  Number.isFinite(ll2.lng)
+                ) {
+                  kmPerScreenPx = Math.max(0.0001, haversineKm(ll1.lat, ll1.lng, ll2.lat, ll2.lng) / 100);
+                }
               } else {
                 kmPerScreenPx = Math.max(0.0001, pixelsToKm(1, st.map) / cam.zoom);
               }
@@ -2247,7 +2485,30 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
           }
         }
       }
-      hoveredDistrictRef.current = hitLockedBadge ? hitLockedBadge.id : null;
+      const nextHoveredId = hitLockedBadge ? hitLockedBadge.id : null;
+      hoveredDistrictRef.current = nextHoveredId;
+      if (prevHoveredRegionRef.current !== nextHoveredId) {
+        const mlMap = mlMapRef.current;
+        if (mlMap && mlMap.getSource('city-regions-geojson')) {
+          try {
+            if (prevHoveredRegionRef.current) {
+              mlMap.setFeatureState(
+                { source: 'city-regions-geojson', id: prevHoveredRegionRef.current },
+                { hover: false }
+              );
+            }
+            if (nextHoveredId) {
+              mlMap.setFeatureState(
+                { source: 'city-regions-geojson', id: nextHoveredId },
+                { hover: true }
+              );
+            }
+          } catch {
+            // ignore transient style reload
+          }
+        }
+        prevHoveredRegionRef.current = nextHoveredId;
+      }
       const hoveringDist = Boolean(hitLockedBadge);
       setIsHoveringDistrict((prev) => (prev === hoveringDist ? prev : hoveringDist));
 
@@ -2410,6 +2671,19 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
             onPointerUp={handlePointerUp}
             onPointerLeave={() => {
               handlePointerUp();
+              hoveredDistrictRef.current = null;
+              if (prevHoveredRegionRef.current && mlMapRef.current?.getSource('city-regions-geojson')) {
+                try {
+                  mlMapRef.current.setFeatureState(
+                    { source: 'city-regions-geojson', id: prevHoveredRegionRef.current },
+                    { hover: false }
+                  );
+                } catch {
+                  // ignore
+                }
+              }
+              prevHoveredRegionRef.current = null;
+              setIsHoveringDistrict(false);
               setHoveredRoadTooltip(null);
             }}
             onWheel={handleWheel}

@@ -412,7 +412,7 @@ export default function App() {
           liveLines.reduce((sum, l) => sum + l.trains.length * 12, 0)) *
           difficulty.maintenanceMultiplier
       );
-      const dailyTotalCityTrips = Math.max(120000, Math.round(cov.totalPopulation * 1.45));
+      const dailyTotalCityTrips = Math.max(120000, Math.round(cov.totalPopulation * 1.15));
       const modeSharePercent = Math.min(
         85,
         Number(
@@ -427,7 +427,7 @@ export default function App() {
       const gdpBillions = Number(
         (
           (cov.totalPopulation / 10000) *
-          (0.32 + modeSharePercent * 0.008) *
+          (16 + modeSharePercent * 0.28) *
           (1 + (timeRef.current.year - sim.map.startYear) * 0.03)
         ).toFixed(1)
       );

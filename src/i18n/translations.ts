@@ -29,7 +29,9 @@ export function formatPop(pop: number, lang: Language): string {
     return `${Math.round(pop / 1000)}K`;
   }
   const unit = lang === 'zh-Hans' ? '万' : '萬';
-  return `${Math.round(pop / 10000).toLocaleString()} ${unit}`;
+  const wan = pop / 10000;
+  if (wan >= 1000) return `${Math.round(wan).toLocaleString()} ${unit}`;
+  return `${wan.toFixed(1)} ${unit}`;
 }
 
 export function formatRidershipWan(riders: number, lang: Language): string {

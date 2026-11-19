@@ -44,6 +44,7 @@ import {
   QIANDAO_LAKE_POLY_WGS84,
   QIANTANG_RIVER_WGS84,
   TAIHU_LAKE_POLY_WGS84,
+  YANGCHENG_LAKE_POLY_WGS84,
   YANGTZE_RIVER_WGS84,
 } from './neighborGeoData';
 
@@ -689,6 +690,7 @@ export function generateCityMap(
       isStarter,
       unlocked: isStarter,
       growthMultiplier: src.growthMultiplier,
+      realPopulation: src.realPopulation,
       provinceId: 'prov_sh',
       provinceName: '上海市',
       cityId: 'city_sh',
@@ -712,6 +714,7 @@ export function generateCityMap(
       isStarter: false,
       unlocked: false,
       growthMultiplier: src.growthMultiplier,
+      realPopulation: src.realPopulation,
       provinceId: src.provinceId,
       provinceName: src.provinceName,
       cityId: src.cityId,
@@ -795,6 +798,11 @@ export function generateCityMap(
       id: 'lake_qiandao',
       name: '千島湖',
       points: QIANDAO_LAKE_POLY_WGS84.map(([la, lo]) => toWorld(la, lo)),
+    },
+    {
+      id: 'lake_yangcheng',
+      name: '陽澄湖',
+      points: YANGCHENG_LAKE_POLY_WGS84.map(([la, lo]) => toWorld(la, lo)),
     },
   ];
 

@@ -110,7 +110,7 @@ export function getEsriLightGrayStyle(): StyleSpecification {
           'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
         ],
         tileSize: 256,
-        maxzoom: 16,
+        maxzoom: 14,
         attribution: 'Tiles © Esri — Esri, DeLorme, NAVTEQ',
       },
     },
@@ -148,7 +148,7 @@ export function getEsriDarkGrayStyle(): StyleSpecification {
           'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
         ],
         tileSize: 256,
-        maxzoom: 16,
+        maxzoom: 14,
         attribution: 'Tiles © Esri — Esri, DeLorme, NAVTEQ',
       },
     },
@@ -186,21 +186,43 @@ export function getPureCanvasGeoStyle(): StyleSpecification {
         id: 'pure-light-bg',
         type: 'background',
         paint: {
-          'background-color': '#F2F4F7',
+          'background-color': '#DCE9F5',
         },
       },
     ],
   };
 }
 
+function closeWorldRingToLonLat(
+  ring: { x: number; y: number }[],
+  geo: GeoBounds,
+  mapWidth: number,
+  mapHeight: number
+): number[][] | null {
+  if (ring.length < 3) return null;
+  const coords: number[][] = [];
+  for (const pt of ring) {
+    if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) continue;
+    const ll = worldToLatLon(pt.x, pt.y, geo, mapWidth, mapHeight);
+    if (!Number.isFinite(ll.lon) || !Number.isFinite(ll.lat)) continue;
+    coords.push([ll.lon, ll.lat]);
+  }
+  if (coords.length < 3) return null;
+  const first = coords[0];
+  const last = coords[coords.length - 1];
+  if (first[0] !== last[0] || first[1] !== last[1]) {
+    coords.push([first[0], first[1]]);
+  }
+  return coords.length >= 4 ? coords : null;
+}
+
 /**
  * Converts a RiverPath centerline into a closed GeoJSON-compatible polygon ring in world coordinates
- * so river channels (Huangpu River, Tamsui River, etc.) render smoothly as filled vector polygons.
+ * so river channels (Yangtze, Qiantang, Suzhou Creek, etc.) render smoothly as filled vector polygons.
  */
 export function riverPathToPolygonRing(river: RiverPath): { x: number; y: number }[] {
   const pts = river.points;
   if (pts.length < 2) return [];
-  const halfW = Math.max(0.7, river.width * 0.5);
   const leftSide: { x: number; y: number }[] = [];
   const rightSide: { x: number; y: number }[] = [];
 
@@ -212,6 +234,7 @@ export function riverPathToPolygonRing(river: RiverPath): { x: number; y: number
     const len = Math.max(0.001, Math.hypot(dx, dy));
     const nx = -dy / len;
     const ny = dx / len;
+    const halfW = Math.max(0.7, (river.widths?.[i] ?? river.width) * 0.5);
     leftSide.push({ x: pts[i].x + nx * halfW, y: pts[i].y + ny * halfW });
     rightSide.push({ x: pts[i].x - nx * halfW, y: pts[i].y - ny * halfW });
   }
@@ -237,14 +260,11 @@ export function buildCityRiversGeoJson(map: CityMap): RiverGeoJsonCollection {
   }
   const geo = map.geoBounds;
   const features = map.rivers
+    .filter((rv) => !rv.skipPolylineWaterCheck)
     .map((rv) => {
       const ringWorld = riverPathToPolygonRing(rv);
-      if (ringWorld.length < 4) return null;
-      const coords = ringWorld.map((p) => {
-        const ll = worldToLatLon(p.x, p.y, geo, map.width, map.height);
-        return [ll.lon, ll.lat];
-      });
-      coords.push(coords[0]);
+      const coords = closeWorldRingToLonLat(ringWorld, geo, map.width, map.height);
+      if (!coords) return null;
       return {
         type: 'Feature' as const,
         properties: { id: rv.id, name: rv.name },
@@ -255,6 +275,155 @@ export function buildCityRiversGeoJson(map: CityMap): RiverGeoJsonCollection {
       };
     })
     .filter((f): f is NonNullable<typeof f> => f !== null);
+
+  return { type: 'FeatureCollection', features };
+}
+
+export interface GeoJsonMultiPolygonFeature {
+  type: 'Feature';
+  properties: Record<string, string | number | boolean>;
+  geometry: {
+    type: 'MultiPolygon';
+    coordinates: number[][][][];
+  };
+}
+
+export interface GeoJsonMultiPolygonCollection {
+  type: 'FeatureCollection';
+  features: GeoJsonMultiPolygonFeature[];
+}
+
+export function buildPureLandGeoJson(map: CityMap): GeoJsonMultiPolygonCollection {
+  if (!map.geoBounds) {
+    return { type: 'FeatureCollection', features: [] };
+  }
+  const geo = map.geoBounds;
+  const features: GeoJsonMultiPolygonFeature[] = [];
+  for (const d of map.districts) {
+    const rings = d.polygons ?? (d.polygon ? [d.polygon] : []);
+    const polyCoords: number[][][][] = [];
+    for (const r of rings) {
+      const closed = closeWorldRingToLonLat(r, geo, map.width, map.height);
+      if (closed) polyCoords.push([closed]);
+    }
+    if (polyCoords.length === 0) continue;
+    features.push({
+      type: 'Feature',
+      properties: { id: d.id, name: d.name },
+      geometry: {
+        type: 'MultiPolygon',
+        coordinates: polyCoords,
+      },
+    });
+  }
+  return { type: 'FeatureCollection', features };
+}
+
+export function buildWaterPolygonsGeoJson(map: CityMap): RiverGeoJsonCollection {
+  if (!map.geoBounds || !map.waterPolygons) {
+    return { type: 'FeatureCollection', features: [] };
+  }
+  const geo = map.geoBounds;
+  const features: RiverGeoJsonCollection['features'] = [];
+  for (const wp of map.waterPolygons) {
+    const coords = closeWorldRingToLonLat(wp.points, geo, map.width, map.height);
+    if (!coords) continue;
+    features.push({
+      type: 'Feature',
+      properties: { id: wp.id, name: wp.id },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [coords],
+      },
+    });
+  }
+  return { type: 'FeatureCollection', features };
+}
+
+export function buildTieredRegionsGeoJson(
+  map: CityMap,
+  canUnlockCity: (city: NonNullable<CityMap['cities']>[number]) => boolean,
+  canUnlockDistrict: (district: CityMap['districts'][number]) => boolean
+): GeoJsonMultiPolygonCollection {
+  if (!map.geoBounds) {
+    return { type: 'FeatureCollection', features: [] };
+  }
+  const geo = map.geoBounds;
+  const features: GeoJsonMultiPolygonFeature[] = [];
+  const provUnlockedMap = new Map<string, boolean>(
+    (map.provinces ?? []).map((p) => [p.id, p.unlocked])
+  );
+  const cityUnlockedMap = new Map<string, boolean>(
+    (map.cities ?? []).map((c) => [c.id, c.unlocked])
+  );
+
+  const toMultiPolygonCoords = (rings: { x: number; y: number }[][]): number[][][][] => {
+    const out: number[][][][] = [];
+    for (const r of rings) {
+      const closed = closeWorldRingToLonLat(r, geo, map.width, map.height);
+      if (closed) out.push([closed]);
+    }
+    return out;
+  };
+
+  // Tier 1: Locked Provinces
+  for (const prov of map.provinces ?? []) {
+    if (prov.unlocked) continue;
+    const polyCoords = toMultiPolygonCoords(prov.polygons ?? []);
+    if (polyCoords.length === 0) continue;
+    features.push({
+      type: 'Feature',
+      properties: {
+        regionId: prov.id,
+        tier: 1,
+        unlocked: false,
+        isStarter: false,
+        canUnlock: true,
+      },
+      geometry: { type: 'MultiPolygon', coordinates: polyCoords },
+    });
+  }
+
+  // Tier 2: Locked Cities in Unlocked Provinces
+  for (const city of map.cities ?? []) {
+    if (city.unlocked) continue;
+    if (!provUnlockedMap.get(city.provinceId)) continue;
+    const polyCoords = toMultiPolygonCoords(city.polygons ?? []);
+    if (polyCoords.length === 0) continue;
+    features.push({
+      type: 'Feature',
+      properties: {
+        regionId: city.id,
+        tier: 2,
+        unlocked: false,
+        isStarter: false,
+        canUnlock: canUnlockCity(city),
+      },
+      geometry: { type: 'MultiPolygon', coordinates: polyCoords },
+    });
+  }
+
+  // Tier 3: Shanghai & Districts inside Unlocked Cities
+  for (const d of map.districts) {
+    const isShanghaiDist = !d.provinceId || d.provinceId === 'prov_sh';
+    const provUnlocked = isShanghaiDist || Boolean(provUnlockedMap.get(d.provinceId!));
+    const cityUnlocked = isShanghaiDist || !d.cityId || Boolean(cityUnlockedMap.get(d.cityId));
+    if (!provUnlocked || !cityUnlocked) continue;
+    const rings = d.polygons ?? (d.polygon ? [d.polygon] : []);
+    const polyCoords = toMultiPolygonCoords(rings);
+    if (polyCoords.length === 0) continue;
+    features.push({
+      type: 'Feature',
+      properties: {
+        regionId: d.id,
+        tier: 3,
+        unlocked: d.unlocked,
+        isStarter: Boolean(d.isStarter),
+        canUnlock: !d.unlocked && canUnlockDistrict(d),
+      },
+      geometry: { type: 'MultiPolygon', coordinates: polyCoords },
+    });
+  }
 
   return { type: 'FeatureCollection', features };
 }

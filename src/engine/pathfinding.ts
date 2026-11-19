@@ -399,10 +399,19 @@ export function recomputeMapCoverage(map: CityMap, stations: Station[]): {
     }
   }
 
+  let unlockedRealPop = 0;
+  let hasRealPopData = false;
+  for (const d of map.districts) {
+    if (typeof d.realPopulation === 'number') {
+      hasRealPopData = true;
+      if (d.unlocked) unlockedRealPop += d.realPopulation;
+    }
+  }
+
   return {
     coveragePercent: totalWeight > 0 ? Math.min(100, (coveredWeight / totalWeight) * 100) : 0,
-    totalPopulation: totalPop,
-    totalJobs: totalJobs,
+    totalPopulation: hasRealPopData ? unlockedRealPop : totalPop,
+    totalJobs: hasRealPopData ? Math.round(unlockedRealPop * 0.56) : totalJobs,
     avgCongestion: landCells > 0 ? (congestionSum / landCells) * 100 : 0,
   };
 }

@@ -48,6 +48,7 @@ export interface DistrictInfo {
   isStarter: boolean;
   unlocked: boolean;
   growthMultiplier: number;
+  realPopulation?: number;
   provinceId?: string;
   provinceName?: string;
   cityId?: string;
