@@ -1,5 +1,12 @@
 import type { StyleSpecification } from 'maplibre-gl';
-import { BuildingModel, CityMap, CityPoi, RiverPath, RoadSegment } from '../types/game';
+import { BuildingModel, CityCell, CityMap, CityPoi, RiverPath, RoadSegment } from '../types/game';
+import {
+  getWorldPopCellQ,
+  WORLDPOP_CELL_COLS,
+  WORLDPOP_CELL_ROWS,
+  WORLDPOP_HI_HEIGHT,
+  WORLDPOP_HI_WIDTH,
+} from './worldpopBaseline';
 
 export type OpenMapStyleId = 'esri_light_gray' | 'canvas_vector' | 'esri_dark_gray';
 
@@ -1000,5 +1007,261 @@ out skel qt;
   localStreetsInFlight.set(key, task);
   return task;
 }
+
+export const POP_HEATMAP_STOPS: Array<{ t: number; r: number; g: number; b: number; a: number }> = [
+  { t: 0.0, r: 255, g: 248, b: 224, a: 158 }, // #FFF8E0 Warm Ivory-White (0 density — zero blank land gaps)
+  { t: 0.16, r: 254, g: 240, b: 138, a: 174 }, // #FEF08A Soft Luminous Yellow
+  { t: 0.32, r: 250, g: 204, b: 21, a: 192 }, // #FACC15 Golden Yellow
+  { t: 0.48, r: 249, g: 115, b: 22, a: 208 }, // #F97316 Vibrant Orange
+  { t: 0.64, r: 239, g: 68, b: 68, a: 222 }, // #EF4444 Crimson Red
+  { t: 0.8, r: 192, g: 38, b: 211, a: 236 }, // #C026D3 Magenta-Violet
+  { t: 0.92, r: 126, g: 34, b: 206, a: 246 }, // #7E22CE Royal Purple
+  { t: 1.0, r: 76, g: 29, b: 149, a: 254 }, // #4C1D95 Deepest Imperial Purple (60k+/km²)
+];
+
+function buildPopHeatmapLut(): Uint8ClampedArray {
+  const lut = new Uint8ClampedArray(256 * 4);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let lo = POP_HEATMAP_STOPS[0];
+    let hi = POP_HEATMAP_STOPS[POP_HEATMAP_STOPS.length - 1];
+    for (let s = 0; s < POP_HEATMAP_STOPS.length - 1; s++) {
+      if (t >= POP_HEATMAP_STOPS[s].t && t <= POP_HEATMAP_STOPS[s + 1].t) {
+        lo = POP_HEATMAP_STOPS[s];
+        hi = POP_HEATMAP_STOPS[s + 1];
+        break;
+      }
+    }
+    const span = Math.max(1e-6, hi.t - lo.t);
+    const k = Math.max(0, Math.min(1, (t - lo.t) / span));
+    const idx = i * 4;
+    lut[idx] = Math.round(lo.r + (hi.r - lo.r) * k);
+    lut[idx + 1] = Math.round(lo.g + (hi.g - lo.g) * k);
+    lut[idx + 2] = Math.round(lo.b + (hi.b - lo.b) * k);
+    lut[idx + 3] = Math.round(lo.a + (hi.a - lo.a) * k);
+  }
+  return lut;
+}
+
+const POP_HEATMAP_LUT = buildPopHeatmapLut();
+
+const baselineCellTotalsMap = new WeakMap<CityCell[], Float32Array>();
+
+export function registerCityCellsBaseline(cells: CityCell[]): Float32Array {
+  const arr = new Float32Array(cells.length);
+  for (let i = 0; i < cells.length; i++) {
+    arr[i] = cells[i].population + cells[i].jobs;
+  }
+  baselineCellTotalsMap.set(cells, arr);
+  return arr;
+}
+
+let worldpopHiResCache: Float32Array | null = null;
+let worldpopHiResPromise: Promise<Float32Array | null> | null = null;
+
+export function isWorldPopHiResReady(): boolean {
+  return worldpopHiResCache !== null;
+}
+
+function smoothGrid5Tap(src: Float32Array, width: number, height: number, passes: number): Float32Array {
+  const a = new Float32Array(src);
+  const b = new Float32Array(src.length);
+  const w0 = 0.44;
+  const w1 = 0.2;
+  const w2 = 0.08;
+
+  for (let p = 0; p < passes; p++) {
+    for (let y = 0; y < height; y++) {
+      const rowOff = y * width;
+      for (let x = 0; x < width; x++) {
+        const xm2 = x >= 2 ? x - 2 : 0;
+        const xm1 = x >= 1 ? x - 1 : 0;
+        const xp1 = x + 1 < width ? x + 1 : width - 1;
+        const xp2 = x + 2 < width ? x + 2 : width - 1;
+        b[rowOff + x] =
+          a[rowOff + xm2] * w2 +
+          a[rowOff + xm1] * w1 +
+          a[rowOff + x] * w0 +
+          a[rowOff + xp1] * w1 +
+          a[rowOff + xp2] * w2;
+      }
+    }
+    for (let y = 0; y < height; y++) {
+      const ym2 = (y >= 2 ? y - 2 : 0) * width;
+      const ym1 = (y >= 1 ? y - 1 : 0) * width;
+      const y0 = y * width;
+      const yp1 = (y + 1 < height ? y + 1 : height - 1) * width;
+      const yp2 = (y + 2 < height ? y + 2 : height - 1) * width;
+      for (let x = 0; x < width; x++) {
+        a[y0 + x] =
+          b[ym2 + x] * w2 +
+          b[ym1 + x] * w1 +
+          b[y0 + x] * w0 +
+          b[yp1 + x] * w1 +
+          b[yp2 + x] * w2;
+      }
+    }
+  }
+  return a;
+}
+
+/**
+ * Asynchronously loads and pre-smooths the real WorldPop 2020 1km UN-adjusted spatial raster
+ * (/assets/worldpop_yrd_2020.png, 636x936) in Web Mercator game coordinates.
+ */
+export function preloadWorldPopHiRes(onLoaded?: () => void): Float32Array | null {
+  if (worldpopHiResCache) return worldpopHiResCache;
+  if (typeof window === 'undefined' || typeof Image === 'undefined' || typeof document === 'undefined') {
+    return null;
+  }
+
+  if (!worldpopHiResPromise) {
+    worldpopHiResPromise = new Promise<Float32Array | null>((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const c = document.createElement('canvas');
+          c.width = WORLDPOP_HI_WIDTH;
+          c.height = WORLDPOP_HI_HEIGHT;
+          const ctx = c.getContext('2d');
+          if (!ctx) {
+            resolve(null);
+            return;
+          }
+          ctx.drawImage(img, 0, 0, WORLDPOP_HI_WIDTH, WORLDPOP_HI_HEIGHT);
+          const rgba = ctx.getImageData(0, 0, WORLDPOP_HI_WIDTH, WORLDPOP_HI_HEIGHT).data;
+          const raw = new Float32Array(WORLDPOP_HI_WIDTH * WORLDPOP_HI_HEIGHT);
+          for (let i = 0; i < raw.length; i++) {
+            raw[i] = rgba[i * 4] / 255;
+          }
+          worldpopHiResCache = smoothGrid5Tap(raw, WORLDPOP_HI_WIDTH, WORLDPOP_HI_HEIGHT, 2);
+          resolve(worldpopHiResCache);
+        } catch {
+          resolve(null);
+        }
+      };
+      img.onerror = () => resolve(null);
+      img.src = '/assets/worldpop_yrd_2020.png';
+    });
+  }
+
+  if (onLoaded) {
+    worldpopHiResPromise.then((res) => {
+      if (res) onLoaded();
+    });
+  }
+  return null;
+}
+
+let worldpopSyncFallbackCache: Float32Array | null = null;
+function getSmoothedWorldPopSyncFallback(): Float32Array {
+  if (worldpopSyncFallbackCache) return worldpopSyncFallbackCache;
+  const q = getWorldPopCellQ();
+  const raw = new Float32Array(q.length);
+  for (let i = 0; i < q.length; i++) raw[i] = q[i] / 255;
+  worldpopSyncFallbackCache = smoothGrid5Tap(raw, WORLDPOP_CELL_COLS, WORLDPOP_CELL_ROWS, 2);
+  return worldpopSyncFallbackCache;
+}
+
+function sampleBilinear(
+  grid: Float32Array,
+  gw: number,
+  gh: number,
+  uNorm: number,
+  vNorm: number
+): number {
+  const gx = Math.max(0, Math.min(gw - 1.0001, uNorm * gw - 0.5));
+  const gy = Math.max(0, Math.min(gh - 1.0001, vNorm * gh - 0.5));
+  const x0 = Math.floor(gx);
+  const y0 = Math.floor(gy);
+  const x1 = Math.min(gw - 1, x0 + 1);
+  const y1 = Math.min(gh - 1, y0 + 1);
+  const fx = gx - x0;
+  const fy = gy - y0;
+  const row0 = y0 * gw;
+  const row1 = y1 * gw;
+  return (
+    (grid[row0 + x0] * (1 - fx) + grid[row0 + x1] * fx) * (1 - fy) +
+    (grid[row1 + x0] * (1 - fx) + grid[row1 + x1] * fx) * fy
+  );
+}
+
+/**
+ * Generates an ultra-smooth, WorldPop 2020-grounded continuous density heatmap canvas:
+ * White/Cream (#FFF8E0, 0) -> Yellow -> Orange -> Red -> Magenta -> Deep Purple (#4C1D95, 60k+/km²).
+ * Every non-water land pixel receives continuous color coverage (zero blank land holes),
+ * while water pixels feather cleanly to transparent at coastlines and riverbanks.
+ */
+export function buildPopulationHeatmapCanvas(cityMap: CityMap): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') return null;
+  const cols = cityMap.cols;
+  const rows = cityMap.rows;
+  if (cols <= 1 || rows <= 1 || cityMap.cells.length === 0) return null;
+
+  const n = cols * rows;
+  const baseline = baselineCellTotalsMap.get(cityMap.cells) ?? registerCityCellsBaseline(cityMap.cells);
+
+  const landRaw = new Float32Array(n);
+  const deltaRaw = new Float32Array(n);
+
+  for (let i = 0; i < cityMap.cells.length && i < n; i++) {
+    const c = cityMap.cells[i];
+    if (c.terrain === 'water') {
+      landRaw[i] = 0;
+      deltaRaw[i] = 0;
+    } else {
+      landRaw[i] = 1;
+      deltaRaw[i] = Math.max(0, c.population + c.jobs - (baseline[i] ?? 0));
+    }
+  }
+
+  const landSmooth = smoothGrid5Tap(landRaw, cols, rows, 2);
+  const deltaSmooth = smoothGrid5Tap(deltaRaw, cols, rows, 2);
+
+  const useHiRes = worldpopHiResCache !== null;
+  const baseGrid = useHiRes ? worldpopHiResCache! : getSmoothedWorldPopSyncFallback();
+  const baseW = useHiRes ? WORLDPOP_HI_WIDTH : WORLDPOP_CELL_COLS;
+  const baseH = useHiRes ? WORLDPOP_HI_HEIGHT : WORLDPOP_CELL_ROWS;
+
+  const upScale = 4;
+  const outW = cols * upScale;
+  const outH = rows * upScale;
+  const canvas = document.createElement('canvas');
+  canvas.width = outW;
+  canvas.height = outH;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  const img = ctx.createImageData(outW, outH);
+  const px = img.data;
+
+  for (let oy = 0; oy < outH; oy++) {
+    const vNorm = (oy + 0.5) / outH;
+    for (let ox = 0; ox < outW; ox++) {
+      const uNorm = (ox + 0.5) / outW;
+
+      const landFrac = sampleBilinear(landSmooth, cols, rows, uNorm, vNorm);
+      if (landFrac <= 0.02) continue;
+
+      const baseNorm = sampleBilinear(baseGrid, baseW, baseH, uNorm, vNorm);
+      const todDelta = sampleBilinear(deltaSmooth, cols, rows, uNorm, vNorm);
+      const norm = Math.max(0, Math.min(1, baseNorm + Math.min(0.28, todDelta / 2600)));
+
+      const lutIdx = Math.min(255, Math.max(0, Math.round(norm * 255))) * 4;
+      const outIdx = (oy * outW + ox) * 4;
+
+      const coastFade = Math.min(1, Math.max(0, (landFrac - 0.02) * 1.65));
+      px[outIdx] = POP_HEATMAP_LUT[lutIdx];
+      px[outIdx + 1] = POP_HEATMAP_LUT[lutIdx + 1];
+      px[outIdx + 2] = POP_HEATMAP_LUT[lutIdx + 2];
+      px[outIdx + 3] = Math.round(POP_HEATMAP_LUT[lutIdx + 3] * coastFade);
+    }
+  }
+
+  ctx.putImageData(img, 0, 0);
+  return canvas;
+}
+
+
 
 

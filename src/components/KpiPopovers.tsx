@@ -360,19 +360,33 @@ export const KpiPopovers: React.FC<KpiPopoversProps> = ({
           {formatPop(stats.totalPopulation, lang)}
         </div>
 
-        <label className="p-3 rounded-lg bg-amber-50 border border-amber-200 flex items-center justify-between cursor-pointer">
-          <div>
-            <div className="text-xs font-semibold text-amber-900">{t(lang, 'popDensityLayer')}</div>
-            <div className="text-[11px] text-amber-800/80 mt-0.5">
-              {lang === 'en' ? 'Residential & employment density heatmap' : '顯示各街區常住人口與職缺熱區'}
+        <label className="p-3 rounded-lg bg-slate-50 border border-slate-200 block space-y-2 cursor-pointer">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-xs font-semibold text-slate-900">{t(lang, 'popDensityLayer')}</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">
+                {lang === 'en'
+                  ? 'WorldPop 2020 spatial density (Cream -> Yellow -> Red -> Purple)'
+                  : '平滑人口與職住密度（WorldPop 2020 · 白→黃→紅→紫）'}
+              </div>
             </div>
+            <input
+              type="checkbox"
+              checked={layers.populationHeatmap}
+              onChange={() => onToggleLayer('populationHeatmap')}
+              className="w-4 h-4 accent-purple-700 rounded"
+            />
           </div>
-          <input
-            type="checkbox"
-            checked={layers.populationHeatmap}
-            onChange={() => onToggleLayer('populationHeatmap')}
-            className="w-4 h-4 accent-amber-600 rounded"
-          />
+          {layers.populationHeatmap && (
+            <div className="space-y-1">
+              <div className="h-2 w-full rounded-full border border-slate-300 bg-[linear-gradient(90deg,#FFF8E0_0%,#FEF08A_16%,#FACC15_32%,#F97316_48%,#EF4444_64%,#C026D3_80%,#7E22CE_92%,#4C1D95_100%)]" />
+              <div className="flex justify-between text-[10px] font-mono-tabular text-slate-500">
+                <span>0 (白/黃)</span>
+                <span>中等 (紅/橙)</span>
+                <span>6 萬人/km² (紫)</span>
+              </div>
+            </div>
+          )}
         </label>
 
         <div className="space-y-1.5 text-xs border-t border-slate-200 pt-2.5 font-mono-tabular">

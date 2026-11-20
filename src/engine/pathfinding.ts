@@ -117,6 +117,7 @@ export class TransitRouter {
       if (fullIds.length < 2) continue;
 
       const headwayPenalty = line.headwayMin * 0.45;
+      const speedDenominator = 140 * ((line.speedKmh ?? 60) / 60);
 
       if (line.serviceMode === 'express') {
         const expressIds = fullIds.filter((id, idx) =>
@@ -130,7 +131,7 @@ export class TransitRouter {
           const stB = stationMap.get(b);
           if (!stA || !stB) continue;
           const dist = Math.hypot(stB.x - stA.x, stB.y - stA.y);
-          const expressCost = (dist / 140) * 0.65 + 0.55 + headwayPenalty * 0.14;
+          const expressCost = (dist / speedDenominator) * 0.65 + 0.55 + headwayPenalty * 0.14;
           addBiEdge(a, b, line.id, expressCost);
         }
 
@@ -144,7 +145,7 @@ export class TransitRouter {
             if (!stA || !stB) continue;
             const seg = segMap.get(`${a}_${b}`);
             const dist = seg ? seg.length : Math.hypot(stB.x - stA.x, stB.y - stA.y);
-            const localCost = dist / 140 + 0.7 + headwayPenalty * 0.18;
+            const localCost = dist / speedDenominator + 0.7 + headwayPenalty * 0.18;
             addBiEdge(a, b, line.id, localCost);
           }
         }
@@ -167,7 +168,7 @@ export class TransitRouter {
           const dist = seg ? seg.length : Math.hypot(stB.x - stA.x, stB.y - stA.y);
           const inShortZone = i >= stStart && i + 1 <= stEnd;
           const waitFactor = inShortZone ? 0.08 : 0.18;
-          const travelMinutes = dist / 140 + 0.6 + headwayPenalty * waitFactor;
+          const travelMinutes = dist / speedDenominator + 0.6 + headwayPenalty * waitFactor;
           addBiEdge(a, b, line.id, travelMinutes);
         }
         continue;
@@ -183,7 +184,7 @@ export class TransitRouter {
 
         const seg = segMap.get(`${a}_${b}`);
         const dist = seg ? seg.length : Math.hypot(stB.x - stA.x, stB.y - stA.y);
-        const travelMinutes = dist / 140 + 0.6 + headwayPenalty * 0.15;
+        const travelMinutes = dist / speedDenominator + 0.6 + headwayPenalty * 0.15;
         addBiEdge(a, b, line.id, travelMinutes);
       }
     }

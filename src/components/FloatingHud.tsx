@@ -39,6 +39,9 @@ import {
   FarePolicy,
   Language,
   LayerVisibility,
+  LINE_SPEED_CONFIGS,
+  LINE_SPEED_TIERS,
+  LineSpeedKmh,
   SimulationStats,
   Station,
   StationSize,
@@ -47,9 +50,15 @@ import {
   TodPropertyKind,
   ToolMode,
   TrackDepth,
+  TrackSegment,
   TransitLine,
 } from '../types/game';
-import { getDistrictUnlockCost, getTimeOfDayDemand } from '../engine/simulation';
+import {
+  computeNetworkMileageKm,
+  getDistrictUnlockCost,
+  getLineCurveAnalysis,
+  getTimeOfDayDemand,
+} from '../engine/simulation';
 import { OpenMapStyleId } from '../engine/geo';
 import { formatCurrencyWan, formatPop, t } from '../i18n/translations';
 import { ActiveKpiPopover, KpiPopovers } from './KpiPopovers';
@@ -93,9 +102,11 @@ interface FloatingHudProps {
   onConfirmDraft: () => void;
   lines: TransitLine[];
   stations: Station[];
+  segments: TrackSegment[];
   activeLineId: string;
   onSelectLine: (id: string) => void;
   onCreateLine: () => void;
+  onUpdateLine: (id: string, patch: Partial<TransitLine>) => void;
   selectedStation: Station | null;
   onClearSelectedStation: () => void;
   onUpdateStation: (id: string, patch: Partial<Station>) => void;
@@ -173,9 +184,11 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
   onConfirmDraft,
   lines,
   stations,
+  segments,
   activeLineId,
   onSelectLine,
   onCreateLine,
+  onUpdateLine,
   selectedStation,
   onClearSelectedStation,
   onUpdateStation,
@@ -209,6 +222,7 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
 }) => {
   const [openDrawer, setOpenDrawer] = useState<'none' | 'view' | 'search' | 'menu'>('none');
   const [linePickerOpen, setLinePickerOpen] = useState(false);
+  const [speedPickerOpen, setSpeedPickerOpen] = useState(false);
   const [activeKpi, setActiveKpi] = useState<ActiveKpiPopover>('none');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -596,6 +610,19 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                 />
               </label>
             ))}
+            {layers.populationHeatmap && (
+              <div className="pt-1 pb-0.5 space-y-1">
+                <div className="h-2 w-full rounded-full border border-slate-200 bg-[linear-gradient(90deg,#FFF8E0_0%,#FEF08A_16%,#FACC15_32%,#F97316_48%,#EF4444_64%,#C026D3_80%,#7E22CE_92%,#4C1D95_100%)]" />
+                <div className="flex justify-between text-[10px] font-mono-tabular text-slate-500">
+                  <span>0 (白/黃)</span>
+                  <span>中 (橙/紅)</span>
+                  <span>6 萬人/km² (紫)</span>
+                </div>
+                <div className="text-[10px] text-slate-400">
+                  WorldPop 2020 · 七普空間網格
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="pt-2.5 border-t border-slate-200 space-y-1.5">
@@ -863,7 +890,7 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
           {/* Upward Line Picker Menu when Track Tool is active */}
           {tool === 'track' && linePickerOpen && (
             <div
-              className={`absolute bottom-13 left-0 z-40 w-60 ${popoverSurface} p-1.5 space-y-0.5 max-h-64 overflow-y-auto`}
+              className={`absolute bottom-13 left-0 z-40 w-64 ${popoverSurface} p-1.5 space-y-0.5 max-h-64 overflow-y-auto`}
             >
               {lines.map((line) => (
                 <button
@@ -885,8 +912,8 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                     />
                     <span className="truncate">{line.name}</span>
                   </span>
-                  <span className="text-[10px] font-mono-tabular opacity-70 shrink-0 ml-2">
-                    {line.stationIds.length}站
+                  <span className="text-[10px] font-mono-tabular opacity-75 shrink-0 ml-2">
+                    {line.speedKmh ?? 60}km/h · {line.stationIds.length}站
                   </span>
                 </button>
               ))}
@@ -904,6 +931,59 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
               </div>
             </div>
           )}
+
+          {/* Upward Operating Speed & Turning Radius Picker when Track Tool is active */}
+          {tool === 'track' && speedPickerOpen && activeLine && (() => {
+            const liveKm = computeNetworkMileageKm(
+              map,
+              lines.filter((l) => !l.isDraft),
+              segments
+            );
+            const curveInfo = getLineCurveAnalysis(map, activeLine, stations, segments);
+            const curSpeed: LineSpeedKmh = activeLine.speedKmh ?? 60;
+            const curCfg = LINE_SPEED_CONFIGS[curSpeed];
+            return (
+              <div className={`absolute bottom-13 left-32 z-40 w-80 ${popoverSurface} p-3 space-y-2 text-xs`}>
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-900">設計運行速度 · {activeLine.name}</span>
+                  <span className="font-mono-tabular text-[11px] text-slate-500">
+                    里程 {liveKm.toFixed(1)} km
+                  </span>
+                </div>
+                <div className="grid grid-cols-6 gap-1 bg-slate-100 p-1 rounded-lg">
+                  {LINE_SPEED_TIERS.map((spd) => {
+                    const cfg = LINE_SPEED_CONFIGS[spd];
+                    const selected = curSpeed === spd;
+                    const locked = liveKm < cfg.unlockKm || curveInfo.minRadiusM < cfg.minRadiusM;
+                    return (
+                      <button
+                        key={spd}
+                        onClick={() => onUpdateLine(activeLine.id, { speedKmh: spd })}
+                        className={`py-1.5 rounded-md font-mono-tabular font-bold transition-colors cursor-pointer ${
+                          selected
+                            ? 'bg-slate-900 text-sky-300'
+                            : locked
+                            ? 'text-slate-400 hover:bg-slate-200/60'
+                            : 'text-slate-700 hover:bg-white'
+                        }`}
+                      >
+                        {spd}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="text-[11px] font-mono-tabular text-slate-600 flex items-center justify-between">
+                  <span>
+                    最小轉彎半徑 <strong className="text-slate-900">{curCfg.minRadiusM} m</strong>
+                    {curCfg.isHighSpeed ? ' (高速地鐵)' : ''}
+                  </span>
+                  <span>
+                    營運成本 <strong className="text-amber-700">×{curCfg.costMult.toFixed(2)}</strong>
+                  </span>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Unified Single-Row Build Dock */}
           <div
@@ -941,6 +1021,7 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                     key={item.id}
                     onClick={() => {
                       setLinePickerOpen(false);
+                      setSpeedPickerOpen(false);
                       onSelectTool(item.id);
                     }}
                     className={`h-9 px-3 rounded-lg flex items-center gap-1.5 text-xs font-medium transition-colors whitespace-nowrap cursor-pointer ${
@@ -1030,7 +1111,10 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                 <div className="h-5 w-px bg-slate-200 mx-1 shrink-0" />
 
                 <button
-                  onClick={() => setLinePickerOpen((v) => !v)}
+                  onClick={() => {
+                    setSpeedPickerOpen(false);
+                    setLinePickerOpen((v) => !v);
+                  }}
                   className="h-8 px-2.5 rounded-lg bg-slate-100 hover:bg-slate-200/80 text-xs font-medium text-slate-900 flex items-center gap-2 whitespace-nowrap cursor-pointer shrink-0"
                 >
                   {activeLine && (
@@ -1047,8 +1131,33 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
                   )}
                 </button>
 
+                {activeLine && (() => {
+                  const spd: LineSpeedKmh = activeLine.speedKmh ?? 60;
+                  const cfg = LINE_SPEED_CONFIGS[spd];
+                  return (
+                    <button
+                      onClick={() => {
+                        setLinePickerOpen(false);
+                        setSpeedPickerOpen((v) => !v);
+                      }}
+                      title={`設定路線設計時速（最小轉彎半徑 ${cfg.minRadiusM} m）`}
+                      className={`h-8 px-2.5 rounded-lg border text-xs font-mono-tabular font-semibold whitespace-nowrap cursor-pointer shrink-0 transition-colors ${
+                        cfg.isHighSpeed
+                          ? 'bg-indigo-50 border-indigo-200 text-indigo-800 hover:bg-indigo-100'
+                          : 'bg-white border-slate-200 text-slate-800 hover:bg-slate-50'
+                      }`}
+                    >
+                      {spd} km/h · R≥{cfg.minRadiusM}m
+                    </button>
+                  );
+                })()}
+
                 <button
-                  onClick={() => onOpenMetroCore('lines')}
+                  onClick={() => {
+                    setLinePickerOpen(false);
+                    setSpeedPickerOpen(false);
+                    onOpenMetroCore('lines');
+                  }}
                   title="設定路線快慢車、區間車大小交路與班距"
                   className="h-8 px-2.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700 whitespace-nowrap cursor-pointer shrink-0"
                 >

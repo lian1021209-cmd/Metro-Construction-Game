@@ -5,6 +5,8 @@ import {
   DifficultyConfig,
   DistrictInfo,
   FarePolicy,
+  LINE_SPEED_CONFIGS,
+  LineSpeedKmh,
   ProvinceRegionInfo,
   Station,
   StationSize,
@@ -416,6 +418,250 @@ export function estimateQuadraticLength(
 }
 
 /**
+ * Exact minimum radius of curvature (in meters) along a quadratic Bezier segment.
+ * Straight tracks return Infinity.
+ */
+export function computeBezierMinRadiusMeters(
+  map: CityMap | undefined,
+  x0: number,
+  y0: number,
+  cx: number,
+  cy: number,
+  x1: number,
+  y1: number
+): number {
+  const mPerPx = pixelsToKm(1, map) * 1000;
+  const v0x = cx - x0;
+  const v0y = cy - y0;
+  const ax = x1 - 2 * cx + x0;
+  const ay = y1 - 2 * cy + y0;
+  const aSq = ax * ax + ay * ay;
+  const cross = Math.abs(v0x * ay - v0y * ax);
+  if (aSq < 1e-8 || cross < 1e-8) return Infinity;
+  const tStar = Math.max(0, Math.min(1, -(v0x * ax + v0y * ay) / aSq));
+  const vx = v0x + ax * tStar;
+  const vy = v0y + ay * tStar;
+  const minSpeed = Math.hypot(vx, vy);
+  if (minSpeed < 1e-6) return 0;
+  const rPx = (2 * minSpeed * minSpeed * minSpeed) / cross;
+  return rPx * mPerPx;
+}
+
+/**
+ * Evaluates effective turning radius (in meters) at an intermediate station junction `prev -> cur -> next`
+ * using the arriving & departing Bezier end tangents and adjacent span lengths.
+ */
+export function computeJunctionTurnRadiusMeters(
+  map: CityMap | undefined,
+  prevX: number,
+  prevY: number,
+  inCtrlX: number,
+  inCtrlY: number,
+  curX: number,
+  curY: number,
+  outCtrlX: number,
+  outCtrlY: number,
+  nextX: number,
+  nextY: number
+): number {
+  const mPerPx = pixelsToKm(1, map) * 1000;
+  // Incoming tangent into cur: (cur - inCtrl), fallback (cur - prev)
+  let inDx = curX - inCtrlX;
+  let inDy = curY - inCtrlY;
+  if (Math.hypot(inDx, inDy) < 1e-4) {
+    inDx = curX - prevX;
+    inDy = curY - prevY;
+  }
+  // Outgoing tangent out of cur: (outCtrl - cur), fallback (next - cur)
+  let outDx = outCtrlX - curX;
+  let outDy = outCtrlY - curY;
+  if (Math.hypot(outDx, outDy) < 1e-4) {
+    outDx = nextX - curX;
+    outDy = nextY - curY;
+  }
+  const inLen = Math.hypot(inDx, inDy);
+  const outLen = Math.hypot(outDx, outDy);
+  if (inLen < 1e-4 || outLen < 1e-4) return Infinity;
+
+  const dot = Math.max(-1, Math.min(1, (inDx * outDx + inDy * outDy) / (inLen * outLen)));
+  const deflectionRad = Math.acos(dot);
+  if (deflectionRad < 0.015) return Infinity;
+  if (deflectionRad > Math.PI - 0.015) return 0;
+
+  const spanInM = Math.hypot(curX - prevX, curY - prevY) * mPerPx;
+  const spanOutM = Math.hypot(nextX - curX, nextY - curY) * mPerPx;
+  const armM = Math.min(spanInM, spanOutM, 2000) * 0.45;
+  return armM / Math.tan(deflectionRad / 2);
+}
+
+export function computeNetworkMileageKm(
+  map: CityMap,
+  lines: TransitLine[],
+  segments: TrackSegment[]
+): number {
+  const segMap = new Map<string, TrackSegment>();
+  for (const seg of segments) {
+    segMap.set(`${seg.fromStationId}_${seg.toStationId}`, seg);
+    segMap.set(`${seg.toStationId}_${seg.fromStationId}`, seg);
+  }
+  let totalKm = 0;
+  for (const l of lines) {
+    for (let i = 0; i < l.stationIds.length - 1; i++) {
+      const s = segMap.get(`${l.stationIds[i]}_${l.stationIds[i + 1]}`);
+      if (s) totalKm += pixelsToKm(s.length, map);
+    }
+  }
+  return totalKm;
+}
+
+export function getLineCurveAnalysis(
+  map: CityMap,
+  line: TransitLine,
+  stations: Station[],
+  segments: TrackSegment[]
+): {
+  minRadiusM: number;
+  worstLocation: string | null;
+  speedKmh: LineSpeedKmh;
+  requiredMinRadiusM: number;
+  isCompliant: boolean;
+} {
+  const speedKmh: LineSpeedKmh = line.speedKmh ?? 60;
+  const requiredMinRadiusM = LINE_SPEED_CONFIGS[speedKmh].minRadiusM;
+  const stMap = new Map(stations.map((s) => [s.id, s]));
+  const segMap = new Map<string, TrackSegment>();
+  for (const seg of segments) {
+    segMap.set(`${seg.fromStationId}_${seg.toStationId}`, seg);
+    segMap.set(`${seg.toStationId}_${seg.fromStationId}`, seg);
+  }
+
+  let minRadiusM = Infinity;
+  let worstLocation: string | null = null;
+
+  for (let i = 0; i < line.stationIds.length - 1; i++) {
+    const a = stMap.get(line.stationIds[i]);
+    const b = stMap.get(line.stationIds[i + 1]);
+    if (!a || !b) continue;
+    const seg = segMap.get(`${a.id}_${b.id}`);
+    const cx = seg ? seg.controlX : (a.x + b.x) / 2;
+    const cy = seg ? seg.controlY : (a.y + b.y) / 2;
+    const segR = computeBezierMinRadiusMeters(map, a.x, a.y, cx, cy, b.x, b.y);
+    if (segR < minRadiusM) {
+      minRadiusM = segR;
+      worstLocation = `${a.name} ↔ ${b.name}`;
+    }
+
+    if (i > 0) {
+      const prev = stMap.get(line.stationIds[i - 1]);
+      if (prev && prev.id !== b.id) {
+        const segIn = segMap.get(`${prev.id}_${a.id}`);
+        const inCx = segIn ? segIn.controlX : (prev.x + a.x) / 2;
+        const inCy = segIn ? segIn.controlY : (prev.y + a.y) / 2;
+        const turnR = computeJunctionTurnRadiusMeters(
+          map,
+          prev.x,
+          prev.y,
+          inCx,
+          inCy,
+          a.x,
+          a.y,
+          cx,
+          cy,
+          b.x,
+          b.y
+        );
+        if (turnR < minRadiusM) {
+          minRadiusM = turnR;
+          worstLocation = `${a.name} 轉角`;
+        }
+      }
+    }
+  }
+
+  return {
+    minRadiusM,
+    worstLocation,
+    speedKmh,
+    requiredMinRadiusM,
+    isCompliant: minRadiusM >= requiredMinRadiusM,
+  };
+}
+
+export function validateProposedTrackSegment(
+  map: CityMap,
+  line: TransitLine | undefined,
+  stations: Station[],
+  segments: TrackSegment[],
+  fromSt: Station,
+  toSt: Station,
+  cx: number,
+  cy: number,
+  speedOverride?: LineSpeedKmh
+): {
+  ok: boolean;
+  minRadiusM: number;
+  requiredMinRadiusM: number;
+  speedKmh: LineSpeedKmh;
+  violationReason: 'segment_curve' | 'junction_angle' | null;
+} {
+  const speedKmh: LineSpeedKmh = speedOverride ?? line?.speedKmh ?? 60;
+  const requiredMinRadiusM = LINE_SPEED_CONFIGS[speedKmh].minRadiusM;
+
+  let minRadiusM = computeBezierMinRadiusMeters(map, fromSt.x, fromSt.y, cx, cy, toSt.x, toSt.y);
+  let violationReason: 'segment_curve' | 'junction_angle' | null =
+    minRadiusM < requiredMinRadiusM ? 'segment_curve' : null;
+
+  if (line && line.stationIds.length >= 2) {
+    const stMap = new Map(stations.map((s) => [s.id, s]));
+    const segMap = new Map<string, TrackSegment>();
+    for (const seg of segments) {
+      segMap.set(`${seg.fromStationId}_${seg.toStationId}`, seg);
+      segMap.set(`${seg.toStationId}_${seg.fromStationId}`, seg);
+    }
+
+    let neighborSt: Station | undefined;
+    if (line.stationIds[line.stationIds.length - 1] === fromSt.id) {
+      neighborSt = stMap.get(line.stationIds[line.stationIds.length - 2]);
+    } else if (line.stationIds[0] === fromSt.id) {
+      neighborSt = stMap.get(line.stationIds[1]);
+    }
+
+    if (neighborSt && neighborSt.id !== toSt.id) {
+      const segIn = segMap.get(`${neighborSt.id}_${fromSt.id}`);
+      const inCx = segIn ? segIn.controlX : (neighborSt.x + fromSt.x) / 2;
+      const inCy = segIn ? segIn.controlY : (neighborSt.y + fromSt.y) / 2;
+      const turnR = computeJunctionTurnRadiusMeters(
+        map,
+        neighborSt.x,
+        neighborSt.y,
+        inCx,
+        inCy,
+        fromSt.x,
+        fromSt.y,
+        cx,
+        cy,
+        toSt.x,
+        toSt.y
+      );
+      if (turnR < minRadiusM) {
+        minRadiusM = turnR;
+        if (turnR < requiredMinRadiusM) {
+          violationReason = 'junction_angle';
+        }
+      }
+    }
+  }
+
+  return {
+    ok: minRadiusM >= requiredMinRadiusM,
+    minRadiusM,
+    requiredMinRadiusM,
+    speedKmh,
+    violationReason,
+  };
+}
+
+/**
  * Computes realistic track capex in 萬元 (e.g. ~8,000–35,000 萬 = 0.8–3.5 億元 per segment)
  */
 export function analyzeTrackCrossing(
@@ -428,8 +674,9 @@ export function analyzeTrackCrossing(
   y1: number,
   depth: TrackDepth,
   difficulty: DifficultyConfig,
-  _forDisplayEstimate = false
-): { isUnderwater: boolean; isBridge: boolean; length: number; cost: number } {
+  _forDisplayEstimate = false,
+  speedKmh: LineSpeedKmh = 60
+): { isUnderwater: boolean; isBridge: boolean; length: number; cost: number; minRadiusM: number } {
   const steps = 24;
   let waterHits = 0;
   let hillHits = 0;
@@ -457,14 +704,16 @@ export function analyzeTrackCrossing(
 
   // ~6,500 萬元 / km base cost for underground B1 (~0.65億/km)
   const baseCostPerKmWan = 6500;
-  let multiplier = depthCfg.costMult;
+  const speedCapexMult = Math.max(0.95, LINE_SPEED_CONFIGS[speedKmh]?.costMult ?? 1);
+  let multiplier = depthCfg.costMult * speedCapexMult;
   if (isUnderwater) multiplier *= 1.85;
   if (isBridge) multiplier *= 1.45;
   if (hillHits > 0 && depth !== 'EL') multiplier *= 1.25;
 
   const cost = Math.round(km * baseCostPerKmWan * multiplier * difficulty.costMultiplier);
+  const minRadiusM = computeBezierMinRadiusMeters(map, x0, y0, cx, cy, x1, y1);
 
-  return { isUnderwater, isBridge, length, cost };
+  return { isUnderwater, isBridge, length, cost, minRadiusM };
 }
 
 export function getStationBuildCost(
@@ -664,6 +913,8 @@ export function stepSimulation(
         : 0;
     const desiredTrains = isClosedForNight ? 0 : Math.min(16, baseDesired + dualPatternBonus);
 
+    const speedScale = (line.speedKmh ?? 60) / 60;
+
     line.dispatchTimer += dtSimMinutes;
     if (!isClosedForNight && line.trains.length < desiredTrains && line.dispatchTimer >= line.headwayMin * 0.42) {
       line.dispatchTimer = 0;
@@ -672,13 +923,14 @@ export function stepSimulation(
       const spawnSegIdx = Math.min(activeLineStations.length - 2, spawnStIdx);
       const startSt = stationMap.get(activeLineStations[spawnStIdx]);
       if (startSt) {
+        const baseSpeed = role === 'express' ? 225 : role === 'short_turn' ? 155 : 145;
         const newTrain: Train = {
           id: `tr_${line.id}_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
           lineId: line.id,
           segmentIndex: spawnSegIdx,
           direction: 1,
           t: 0,
-          speed: role === 'express' ? 225 : role === 'short_turn' ? 155 : 145,
+          speed: Math.round(baseSpeed * speedScale),
           state: 'dwelling',
           dwellTimer: 0.4,
           passengers: [],
@@ -701,7 +953,8 @@ export function stepSimulation(
         train.serviceRole = expectedRole;
       }
       const role = train.serviceRole ?? 'local';
-      train.speed = role === 'express' ? 225 : role === 'short_turn' ? 155 : 145;
+      const baseSpeed = role === 'express' ? 225 : role === 'short_turn' ? 155 : 145;
+      train.speed = Math.round(baseSpeed * speedScale);
 
       const minSegIdx = role === 'short_turn' && shortEndIdx > shortStartIdx ? shortStartIdx : 0;
       const maxSegIdx =

@@ -15,6 +15,7 @@ import {
   Language,
   LayerVisibility,
   LINE_PALETTE,
+  LINE_SPEED_CONFIGS,
   LOAN_OFFERS,
   NetworkSnapshot,
   RealCityId,
@@ -34,18 +35,21 @@ import { recomputeMapCoverage, TransitRouter } from './engine/pathfinding';
 import {
   analyzeTrackCrossing,
   applyDailyUrbanEvolution,
+  computeNetworkMileageKm,
   DEFAULT_FARE_POLICY,
   findLockedDistrictAt,
   getCityUnlockCost,
   getCityUnlockPrereq,
   getDistrictUnlockCost,
   getDistrictUnlockPrereq,
+  getLineCurveAnalysis,
   getProvinceUnlockCost,
   getStationBuildCost,
   isWaterAt,
   splitQuadraticBezier,
   stepSimulation,
   unlockRegionCascade,
+  validateProposedTrackSegment,
 } from './engine/simulation';
 import { soundEngine } from './engine/audio';
 import {
@@ -78,6 +82,7 @@ function createEmptyLine(index: number): TransitLine {
     serviceMode: 'local',
     headwayMin: 6,
     carCount: 6,
+    speedKmh: 60,
     fare: 30,
     nightMaintenance: true,
     throughTargetLineId: null,
@@ -409,7 +414,11 @@ export default function App() {
       const dailyMaint = Math.round(
         (liveStations.reduce((sum, s) => sum + STATION_CONFIGS[s.size].maintenance, 0) +
           liveSegments.length * 14 +
-          liveLines.reduce((sum, l) => sum + l.trains.length * 12, 0)) *
+          liveLines.reduce(
+            (sum, l) =>
+              sum + l.trains.length * 12 * (LINE_SPEED_CONFIGS[l.speedKmh ?? 60]?.costMult ?? 0.92),
+            0
+          )) *
           difficulty.maintenanceMultiplier
       );
       const dailyTotalCityTrips = Math.max(120000, Math.round(cov.totalPopulation * 1.15));
@@ -661,7 +670,11 @@ export default function App() {
           const maint = Math.round(
             (liveStations.reduce((sum, s) => sum + STATION_CONFIGS[s.size].maintenance, 0) +
               liveSegments.length * 14 +
-              liveLines.reduce((sum, l) => sum + l.trains.length * 12, 0)) *
+              liveLines.reduce(
+                (sum, l) =>
+                  sum + l.trains.length * 12 * (LINE_SPEED_CONFIGS[l.speedKmh ?? 60]?.costMult ?? 0.92),
+                0
+              )) *
               difficulty.maintenanceMultiplier
           );
           timeRef.current.money -= maint;
@@ -1284,6 +1297,28 @@ export default function App() {
 
       const cx = trackWaypoint ? trackWaypoint.x : (stA.x + stB.x) / 2;
       const cy = trackWaypoint ? trackWaypoint.y : (stA.y + stB.y) / 2;
+
+      const curveCheck = validateProposedTrackSegment(
+        sim.map,
+        line,
+        sim.stations,
+        sim.segments,
+        stA,
+        stB,
+        cx,
+        cy
+      );
+      if (!curveCheck.ok) {
+        soundEngine.playError();
+        const rLabel = Math.round(curveCheck.minRadiusM);
+        showToast(
+          curveCheck.violationReason === 'junction_angle'
+            ? `接軌轉折過急（有效半徑 ${rLabel} m），${curveCheck.speedKmh} km/h 路線要求最小轉彎半徑 ${curveCheck.requiredMinRadiusM} m`
+            : `軌道彎道過急（轉彎半徑 ${rLabel} m），${curveCheck.speedKmh} km/h 路線要求必須達 ${curveCheck.requiredMinRadiusM} m 以上`
+        );
+        return;
+      }
+
       const info = analyzeTrackCrossing(
         sim.map,
         stA.x,
@@ -1294,7 +1329,8 @@ export default function App() {
         stB.y,
         activeDepth,
         difficulty,
-        true
+        true,
+        line.speedKmh ?? 60
       );
 
       const payCost = info.cost;
@@ -1413,6 +1449,34 @@ export default function App() {
     const sim = simDataRef.current;
     const line = sim.lines.find((l) => l.id === id);
     if (!line) return;
+
+    if (patch.speedKmh !== undefined && patch.speedKmh !== (line.speedKmh ?? 60)) {
+      const cfg = LINE_SPEED_CONFIGS[patch.speedKmh];
+      const liveLines = sim.lines.filter((l) => !l.isDraft);
+      const totalKm = computeNetworkMileageKm(sim.map, liveLines, sim.segments);
+      if (totalKm < cfg.unlockKm) {
+        soundEngine.playError();
+        showToast(
+          `${cfg.isHighSpeed ? '高速地鐵 ' : ''}${cfg.label} 需營運里程達 ${cfg.unlockKm} km 解鎖（目前 ${totalKm.toFixed(1)} km）`
+        );
+        return;
+      }
+      const analysis = getLineCurveAnalysis(sim.map, line, sim.stations, sim.segments);
+      if (analysis.minRadiusM < cfg.minRadiusM) {
+        soundEngine.playError();
+        showToast(
+          `「${line.name}」最小轉彎半徑為 ${Math.round(analysis.minRadiusM)} m${
+            analysis.worstLocation ? `（${analysis.worstLocation}）` : ''
+          }，未達 ${cfg.label} 所需 ${cfg.minRadiusM} m`
+        );
+        return;
+      }
+      soundEngine.playUiClick();
+      showToast(
+        `${line.name} 運行速度已調整為 ${cfg.label}${cfg.isHighSpeed ? '（高速地鐵）' : ''} · 最小半徑要求 ${cfg.minRadiusM} m`
+      );
+    }
+
     Object.assign(line, patch);
     routerRef.current.rebuild(sim.stations, sim.segments, sim.lines);
     syncUiSnapshots();
@@ -1874,9 +1938,11 @@ export default function App() {
             onConfirmDraft={handleConfirmDraft}
             lines={linesSnapshot}
             stations={stationsSnapshot}
+            segments={segmentsSnapshot}
             activeLineId={activeLineId}
             onSelectLine={setActiveLineId}
             onCreateLine={handleCreateLine}
+            onUpdateLine={handleUpdateLine}
             selectedStation={selectedStation}
             onClearSelectedStation={() => setSelectedStationId(null)}
             onUpdateStation={handleUpdateStation}

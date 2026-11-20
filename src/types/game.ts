@@ -17,6 +17,17 @@ export type TerrainType = 'water' | 'land' | 'hill';
 
 export type ServiceMode = 'local' | 'express' | 'short_turn' | 'through';
 
+export type LineSpeedKmh = 40 | 60 | 80 | 100 | 120 | 160;
+
+export interface LineSpeedConfig {
+  speedKmh: LineSpeedKmh;
+  label: string;
+  minRadiusM: number;
+  costMult: number;
+  unlockKm: number;
+  isHighSpeed: boolean;
+}
+
 export type ToolMode = 'select' | 'station' | 'track' | 'demolish';
 
 export interface FarePolicy {
@@ -264,6 +275,7 @@ export interface TransitLine {
   shortTurnEndId?: string | null;
   headwayMin: number; // 2..20 min
   carCount: number; // 2..12 cars
+  speedKmh?: LineSpeedKmh; // operating design speed (default 60 km/h)
   fare: number; // legacy line modifier (100% default multiplier or flat fallback)
   nightMaintenance: boolean; // closes 01:00 - 04:30
   throughTargetLineId: string | null;
@@ -617,4 +629,58 @@ export const LOAN_OFFERS: LoanOffer[] = [
     note: '大宗站城一體開發融資，36 期長年限低壓分攤',
   },
 ];
+
+export const LINE_SPEED_TIERS: LineSpeedKmh[] = [40, 60, 80, 100, 120, 160];
+
+export const LINE_SPEED_CONFIGS: Record<LineSpeedKmh, LineSpeedConfig> = {
+  40: {
+    speedKmh: 40,
+    label: '40 km/h',
+    minRadiusM: 100,
+    costMult: 0.85,
+    unlockKm: 0,
+    isHighSpeed: false,
+  },
+  60: {
+    speedKmh: 60,
+    label: '60 km/h',
+    minRadiusM: 150,
+    costMult: 0.92,
+    unlockKm: 0,
+    isHighSpeed: false,
+  },
+  80: {
+    speedKmh: 80,
+    label: '80 km/h',
+    minRadiusM: 250,
+    costMult: 1.0,
+    unlockKm: 20,
+    isHighSpeed: false,
+  },
+  100: {
+    speedKmh: 100,
+    label: '100 km/h',
+    minRadiusM: 400,
+    costMult: 1.15,
+    unlockKm: 80,
+    isHighSpeed: false,
+  },
+  120: {
+    speedKmh: 120,
+    label: '120 km/h',
+    minRadiusM: 600,
+    costMult: 1.38,
+    unlockKm: 300,
+    isHighSpeed: true,
+  },
+  160: {
+    speedKmh: 160,
+    label: '160 km/h',
+    minRadiusM: 1000,
+    costMult: 1.72,
+    unlockKm: 600,
+    isHighSpeed: true,
+  },
+};
+
 

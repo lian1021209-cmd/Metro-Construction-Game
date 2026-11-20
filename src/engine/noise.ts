@@ -19,10 +19,12 @@ import {
   GeoBounds,
   getCachedReverseGeocodePlace,
   latLonToWorld,
+  registerCityCellsBaseline,
   ReverseGeocodePlace,
   toTraditionalPlaceName,
   worldToLatLon,
 } from './geo';
+import { getWorldPopCellQ } from './worldpopBaseline';
 import {
   SHANGHAI_DIANSHAN_LAKE_WGS84,
   SHANGHAI_DISHUI_LAKE_WGS84,
@@ -896,7 +898,8 @@ export function generateCityMap(
       };
     });
 
-  // 6. Grid terrain & urban demographics strictly masked to real land polygons
+  // 6. Grid terrain & urban demographics strictly masked to real land polygons & grounded in WorldPop 2020
+  const wpQGrid = getWorldPopCellQ();
   for (let gy = 0; gy < rows; gy++) {
     for (let gx = 0; gx < cols; gx++) {
       const wx = (gx + 0.5) * cellSize;
@@ -943,6 +946,9 @@ export function generateCityMap(
       let jobs = 0;
 
       if (terrain === 'land') {
+        const wpQ = wpQGrid[gy * cols + gx] ?? 0;
+        const wpRatio = wpQ / 255;
+
         let bestScore = 0;
         let bestType: 'cbd' | 'res' | 'ind' = 'res';
         const localJitter = valueNoise2D(nx * 24, ny * 24, seed + 55);
@@ -959,30 +965,37 @@ export function generateCityMap(
           }
         }
 
-        if (bestScore > 0.14) {
-          if (bestType === 'cbd') {
-            zone = localJitter > 0.78 ? 'park' : 'commercial';
-            if (zone === 'commercial') {
-              jobs = Math.round(bestScore * 2200);
-              population = Math.round(bestScore * 640);
-            }
-          } else if (bestType === 'ind') {
-            zone = 'industrial';
-            jobs = Math.round(bestScore * 1650);
-            population = Math.round(bestScore * 240);
-          } else {
-            zone = localJitter > 0.85 ? 'commercial' : 'residential';
-            if (zone === 'residential') {
-              population = Math.round(bestScore * 2100);
-              jobs = Math.round(bestScore * 280);
+        const wpScalar = Math.round(Math.max(60, Math.pow(wpRatio, 1.35) * 2450 + bestScore * 180));
+
+        if (bestScore > 0.14 || wpRatio >= 0.26) {
+          if (bestType === 'cbd' && bestScore > 0.35) {
+            if (wpRatio < 0.32 || localJitter > 0.86) {
+              zone = 'park';
+              population = Math.max(45, Math.round(wpScalar * 0.65));
+              jobs = Math.max(15, Math.round(wpScalar * 0.35));
             } else {
-              jobs = Math.round(bestScore * 960);
-              population = Math.round(bestScore * 620);
+              zone = 'commercial';
+              jobs = Math.max(60, Math.round(wpScalar * 0.72));
+              population = Math.max(45, Math.round(wpScalar * 0.28));
+            }
+          } else if (bestType === 'ind' && bestScore > 0.25) {
+            zone = 'industrial';
+            jobs = Math.max(45, Math.round(wpScalar * 0.76));
+            population = Math.max(45, Math.round(wpScalar * 0.24));
+          } else {
+            zone = localJitter > 0.85 && wpRatio > 0.42 ? 'commercial' : 'residential';
+            if (zone === 'residential') {
+              population = Math.max(45, Math.round(wpScalar * 0.82));
+              jobs = Math.max(15, Math.round(wpScalar * 0.18));
+            } else {
+              jobs = Math.max(30, Math.round(wpScalar * 0.6));
+              population = Math.max(45, Math.round(wpScalar * 0.4));
             }
           }
-        } else if (localJitter > 0.66) {
-          zone = 'residential';
-          population = Math.round(180 + localJitter * 240);
+        } else {
+          zone = localJitter > 0.68 || wpRatio > 0.18 ? 'residential' : 'none';
+          population = Math.max(45, Math.round(wpScalar * 0.78));
+          jobs = Math.max(15, Math.round(wpScalar * 0.22));
         }
       }
 
@@ -1002,6 +1015,7 @@ export function generateCityMap(
     }
   }
 
+  registerCityCellsBaseline(cells);
   const roads: CityMap['roads'] = []; // Loaded asynchronously via OpenStreetMap Overpass
   const buildings = generateBuildingsFromCells(cols, rows, cellSize, cells, seed);
 

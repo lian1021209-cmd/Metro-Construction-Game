@@ -30,9 +30,11 @@ import {
   getStationBuildCost,
   isWaterAt,
   pixelsToKm,
+  validateProposedTrackSegment,
 } from '../engine/simulation';
 import {
   buildCityRiversGeoJson,
+  buildPopulationHeatmapCanvas,
   buildPureLandGeoJson,
   buildTieredRegionsGeoJson,
   buildWaterPolygonsGeoJson,
@@ -42,11 +44,13 @@ import {
   getEsriLightGrayStyle,
   getPureCanvasGeoStyle,
   haversineKm,
+  isWorldPopHiResReady,
   latLonToWorld,
   normXToLon,
   normYToLat,
   OpenMapStyleId,
   prefetchReverseGeocodePlace,
+  preloadWorldPopHiRes,
   worldToLatLon,
 } from '../engine/geo';
 import { suggestStationName } from '../engine/noise';
@@ -509,7 +513,9 @@ function syncMapLibreVectorLayers(
   mlMap: maplibregl.Map,
   cityMap: CityMap,
   styleId: OpenMapStyleId,
-  isFallback: boolean
+  isFallback: boolean,
+  showPopHeatmap: boolean,
+  popHeatmapDataUrl: string | null
 ) {
   if (!cityMap.geoBounds || !mlMap.getStyle()) return;
 
@@ -548,7 +554,67 @@ function syncMapLibreVectorLayers(
         });
       }
     }
+  }
 
+  // Smooth White -> Yellow -> Orange -> Red -> Magenta -> Purple WorldPop 2020 density raster
+  if (popHeatmapDataUrl) {
+    const geo = cityMap.geoBounds;
+    const tl = worldToLatLon(0, 0, geo, cityMap.width, cityMap.height);
+    const br = worldToLatLon(cityMap.width, cityMap.height, geo, cityMap.width, cityMap.height);
+    const coords: [[number, number], [number, number], [number, number], [number, number]] = [
+      [tl.lon, tl.lat],
+      [br.lon, tl.lat],
+      [br.lon, br.lat],
+      [tl.lon, br.lat],
+    ];
+    const existingImgSrc = mlMap.getSource('population-heatmap-source') as
+      | maplibregl.ImageSource
+      | undefined;
+    if (existingImgSrc && typeof existingImgSrc.updateImage === 'function') {
+      existingImgSrc.updateImage({ url: popHeatmapDataUrl, coordinates: coords });
+    } else if (!existingImgSrc) {
+      mlMap.addSource('population-heatmap-source', {
+        type: 'image',
+        url: popHeatmapDataUrl,
+        coordinates: coords,
+      });
+    }
+
+    if (!mlMap.getLayer('population-heatmap-layer')) {
+      const beforeLayer = mlMap.getLayer('city-water-polygons-fill')
+        ? 'city-water-polygons-fill'
+        : mlMap.getLayer('city-rivers-casing')
+        ? 'city-rivers-casing'
+        : mlMap.getLayer('city-regions-fill')
+        ? 'city-regions-fill'
+        : undefined;
+      mlMap.addLayer(
+        {
+          id: 'population-heatmap-layer',
+          type: 'raster',
+          source: 'population-heatmap-source',
+          layout: {
+            visibility: showPopHeatmap ? 'visible' : 'none',
+          },
+          paint: {
+            'raster-opacity': isDark ? 0.68 : 0.7,
+            'raster-resampling': 'linear',
+            'raster-fade-duration': 0,
+          },
+        },
+        beforeLayer
+      );
+    } else {
+      mlMap.setPaintProperty('population-heatmap-layer', 'raster-opacity', isDark ? 0.68 : 0.7);
+      mlMap.setLayoutProperty(
+        'population-heatmap-layer',
+        'visibility',
+        showPopHeatmap ? 'visible' : 'none'
+      );
+    }
+  }
+
+  if (useVectorBase) {
     const waterPolys = buildWaterPolygonsGeoJson(cityMap);
     if (waterPolys.features.length > 0) {
       upsertGeoJsonSource(mlMap, 'city-water-polygons-geojson', waterPolys, {
@@ -781,6 +847,9 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
     const mlMapRef = useRef<maplibregl.Map | null>(null);
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const baseMapCanvasRef = useRef<HTMLCanvasElement | null>(null);
+    const popHeatmapRef = useRef<{ key: string; canvas: HTMLCanvasElement; dataUrl: string } | null>(null);
+    const mapVersionRef = useRef(mapVersion);
+    mapVersionRef.current = mapVersion;
     const pureVectorFallbackRef = useRef(false);
     const scaleTextRef = useRef<HTMLDivElement>(null);
     const scaleLineRef = useRef<HTMLDivElement>(null);
@@ -888,23 +957,46 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
 
       prevMapStyleRef.current = uiRef.current.openMapStyle;
 
+      const ensurePopHeatmap = () => {
+        const resTag = isWorldPopHiResReady() ? 'hi' : 'sync';
+        const key = `${mapSeedKey}_${mapVersionRef.current}_${resTag}`;
+        if (popHeatmapRef.current && popHeatmapRef.current.key === key) {
+          return popHeatmapRef.current;
+        }
+        const hmCanvas = buildPopulationHeatmapCanvas(simDataRef.current.map);
+        if (!hmCanvas) return null;
+        const entry = {
+          key,
+          canvas: hmCanvas,
+          dataUrl: hmCanvas.toDataURL('image/png'),
+        };
+        popHeatmapRef.current = entry;
+        return entry;
+      };
+
       mlMap.on('load', () => {
         mlMap.resize();
+        const hm = ensurePopHeatmap();
         syncMapLibreVectorLayers(
           mlMap,
           simDataRef.current.map,
           uiRef.current.openMapStyle,
-          pureVectorFallbackRef.current
+          pureVectorFallbackRef.current,
+          uiRef.current.layers.populationHeatmap,
+          hm?.dataUrl ?? null
         );
       });
 
       mlMap.on('style.load', () => {
         prevHoveredRegionRef.current = null;
+        const hm = ensurePopHeatmap();
         syncMapLibreVectorLayers(
           mlMap,
           simDataRef.current.map,
           uiRef.current.openMapStyle,
-          pureVectorFallbackRef.current
+          pureVectorFallbackRef.current,
+          uiRef.current.layers.populationHeatmap,
+          hm?.dataUrl ?? null
         );
       });
 
@@ -947,18 +1039,66 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       mlMap.setStyle(getStyleForMapMode(openMapStyle));
     }, [openMapStyle]);
 
-    // Sync MapLibre 3-tier administrative GeoJSON polygons whenever map unlocks change
+    // Preload 636x936 WorldPop 2020 UN-adjusted raster and seamlessly upgrade the heatmap when decoded
     useEffect(() => {
+      let cancelled = false;
+      preloadWorldPopHiRes(() => {
+        if (cancelled) return;
+        const key = `${mapSeedKey}_${mapVersionRef.current}_hi`;
+        if (popHeatmapRef.current?.key === key) return;
+        const hmCanvas = buildPopulationHeatmapCanvas(simDataRef.current.map);
+        if (!hmCanvas) return;
+        const dataUrl = hmCanvas.toDataURL('image/png');
+        popHeatmapRef.current = { key, canvas: hmCanvas, dataUrl };
+        const mlMap = mlMapRef.current;
+        if (mlMap && simDataRef.current.map.geoBounds && mlMap.getStyle()) {
+          try {
+            syncMapLibreVectorLayers(
+              mlMap,
+              simDataRef.current.map,
+              uiRef.current.openMapStyle,
+              pureVectorFallbackRef.current,
+              uiRef.current.layers.populationHeatmap,
+              dataUrl
+            );
+          } catch {
+            // style not loaded yet; style.load will pick up popHeatmapRef
+          }
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, [mapSeedKey]);
+
+    // Sync MapLibre 3-tier administrative GeoJSON polygons & smoothed population heatmap whenever map updates
+    useEffect(() => {
+      const resTag = isWorldPopHiResReady() ? 'hi' : 'sync';
+      const key = `${mapSeedKey}_${mapVersion}_${resTag}`;
+      if (!popHeatmapRef.current || popHeatmapRef.current.key !== key) {
+        const hmCanvas = buildPopulationHeatmapCanvas(simDataRef.current.map);
+        if (hmCanvas) {
+          popHeatmapRef.current = {
+            key,
+            canvas: hmCanvas,
+            dataUrl: hmCanvas.toDataURL('image/png'),
+          };
+        }
+      }
+
       const mlMap = mlMapRef.current;
       if (!mlMap || !simDataRef.current.map.geoBounds) return;
       prevHoveredRegionRef.current = null;
+      const dataUrl = popHeatmapRef.current?.dataUrl ?? null;
       if (mlMap.getSource('city-regions-geojson')) {
         try {
           syncMapLibreVectorLayers(
             mlMap,
             simDataRef.current.map,
             uiRef.current.openMapStyle,
-            pureVectorFallbackRef.current
+            pureVectorFallbackRef.current,
+            uiRef.current.layers.populationHeatmap,
+            dataUrl
           );
           return;
         } catch {
@@ -970,7 +1110,9 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
           mlMap,
           simDataRef.current.map,
           uiRef.current.openMapStyle,
-          pureVectorFallbackRef.current
+          pureVectorFallbackRef.current,
+          uiRef.current.layers.populationHeatmap,
+          popHeatmapRef.current?.dataUrl ?? null
         );
       };
       mlMap.once('style.load', onStyleReady);
@@ -978,6 +1120,19 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
         mlMap.off('style.load', onStyleReady);
       };
     }, [mapSeedKey, mapVersion]);
+
+    // Toggle GPU population heatmap visibility immediately without rebuilding layers
+    useEffect(() => {
+      const mlMap = mlMapRef.current;
+      if (!mlMap || !simDataRef.current.map.geoBounds) return;
+      if (mlMap.getLayer('population-heatmap-layer')) {
+        mlMap.setLayoutProperty(
+          'population-heatmap-layer',
+          'visibility',
+          layers.populationHeatmap ? 'visible' : 'none'
+        );
+      }
+    }, [layers.populationHeatmap]);
 
     // Sync 2D / 2.5D pitch & bearing
     useEffect(() => {
@@ -1276,12 +1431,18 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               ctx.restore();
             }
 
-            // 2. Smooth Soft Radial Population / Metro Coverage / Zoning Overlays (zero checkerboard dot grid)
-            if (
-              st.layers.populationHeatmap ||
-              st.layers.zones ||
-              st.layers.metroCoverageOverlay
-            ) {
+            // 2. Smooth Population Surface (Canvas2D fallback when WebGL MapLibre inactive) + Metro Coverage / Zoning Overlays
+            if (!isGeoActive && st.layers.populationHeatmap && popHeatmapRef.current?.canvas) {
+              ctx.save();
+              ctx.translate(cam.x, cam.y);
+              ctx.scale(cam.zoom, cam.zoom);
+              ctx.imageSmoothingEnabled = true;
+              ctx.globalAlpha = isDarkMap ? 0.68 : 0.7;
+              ctx.drawImage(popHeatmapRef.current.canvas, 0, 0, st.map.width, st.map.height);
+              ctx.restore();
+            }
+
+            if (st.layers.zones || st.layers.metroCoverageOverlay) {
               const cs = st.map.cellSize;
               const drawSoftGlow = (sx: number, sy: number, r: number, rgbaInner: string, rgbaOuter: string) => {
                 const grad = ctx.createRadialGradient(sx, sy, 0, sx, sy, r);
@@ -1313,15 +1474,6 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                       : '16, 185, 129';
                   const zAlpha = cell.zone === 'commercial' ? 0.11 : 0.085;
                   drawSoftGlow(p.x, p.y, cs * 1.15 * pxScale, `rgba(${zRgb}, ${zAlpha})`, `rgba(${zRgb}, 0)`);
-                }
-
-                if (st.layers.populationHeatmap) {
-                  const density = Math.min(1, (cell.population + cell.jobs) / 2400);
-                  if (density > 0.2) {
-                    const rgb = cell.jobs > cell.population ? '251, 146, 60' : '244, 63, 94';
-                    const alpha = cell.jobs > cell.population ? density * 0.14 : density * 0.11;
-                    drawSoftGlow(p.x, p.y, cs * 1.3 * pxScale, `rgba(${rgb}, ${alpha})`, `rgba(${rgb}, 0)`);
-                  }
                 }
 
                 if (st.layers.metroCoverageOverlay) {
@@ -2008,6 +2160,22 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                 const ctrlY = st.trackWaypoint ? st.trackWaypoint.y : (startSt.y + endY) / 2;
 
                 const activeLine = st.lines.find((l) => l.id === st.activeLineId);
+                const endTargetSt: Station = targetHover ?? {
+                  ...startSt,
+                  id: '__preview_end__',
+                  x: endX,
+                  y: endY,
+                };
+                const curvePreviewCheck = validateProposedTrackSegment(
+                  st.map,
+                  activeLine,
+                  st.stations,
+                  st.segments,
+                  startSt,
+                  endTargetSt,
+                  ctrlX,
+                  ctrlY
+                );
                 const previewPts: { x: number; y: number }[] = [];
                 for (let s = 0; s <= 12; s++) {
                   const pW = evalQuadraticBezier(startSt.x, startSt.y, ctrlX, ctrlY, endX, endY, s / 12);
@@ -2021,8 +2189,12 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                     else ctx.lineTo(sp.x, sp.y);
                   });
                   ctx.setLineDash([8, 6]);
-                  ctx.strokeStyle = activeLine ? activeLine.color : '#38BDF8';
-                  ctx.lineWidth = 4;
+                  ctx.strokeStyle = !curvePreviewCheck.ok
+                    ? '#EF4444'
+                    : activeLine
+                    ? activeLine.color
+                    : '#38BDF8';
+                  ctx.lineWidth = !curvePreviewCheck.ok ? 4.5 : 4;
                   ctx.stroke();
                   ctx.setLineDash([]);
 
@@ -2031,7 +2203,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                     if (isSaneScreenPt(cp)) {
                       ctx.beginPath();
                       ctx.arc(cp.x, cp.y, 5, 0, Math.PI * 2);
-                      ctx.fillStyle = '#FACC15';
+                      ctx.fillStyle = !curvePreviewCheck.ok ? '#EF4444' : '#FACC15';
                       ctx.fill();
                     }
                   }
@@ -2338,6 +2510,24 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                   const ey = targetHover ? targetHover.y : hw.y;
                   const cx = st.trackWaypoint ? st.trackWaypoint.x : (startSt.x + ex) / 2;
                   const cy = st.trackWaypoint ? st.trackWaypoint.y : (startSt.y + ey) / 2;
+                  const activeLine = st.lines.find((l) => l.id === st.activeLineId);
+                  const speedKmh = activeLine?.speedKmh ?? 60;
+                  const endTargetSt: Station = targetHover ?? {
+                    ...startSt,
+                    id: '__preview_end__',
+                    x: ex,
+                    y: ey,
+                  };
+                  const curveCheck = validateProposedTrackSegment(
+                    st.map,
+                    activeLine,
+                    st.stations,
+                    st.segments,
+                    startSt,
+                    endTargetSt,
+                    cx,
+                    cy
+                  );
                   const info = analyzeTrackCrossing(
                     st.map,
                     startSt.x,
@@ -2348,18 +2538,28 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                     ey,
                     st.activeDepth,
                     st.difficulty,
-                    true
+                    true,
+                    speedKmh
                   );
                   const km = pixelsToKm(info.length, st.map).toFixed(2);
-                  const crossingTag = info.isUnderwater
-                    ? ' · 潛盾過江'
-                    : info.isBridge
-                    ? ' · 跨河橋'
-                    : '';
-                  badgeText = `${st.activeDepth} (${km} km)${crossingTag} · ${formatCurrencyWan(
-                    info.cost,
-                    st.lang
-                  )}`;
+                  const radiusTag = Number.isFinite(curveCheck.minRadiusM)
+                    ? `R=${Math.round(curveCheck.minRadiusM)}m`
+                    : '直線';
+                  if (!curveCheck.ok) {
+                    isBlockedTooltip = true;
+                    badgeText = `轉彎半徑 ${Math.round(curveCheck.minRadiusM)} m < ${
+                      curveCheck.speedKmh
+                    } km/h 最低需求 ${curveCheck.requiredMinRadiusM} m`;
+                  } else {
+                    const crossingTag = info.isUnderwater
+                      ? ' · 潛盾過江'
+                      : info.isBridge
+                      ? ' · 跨河橋'
+                      : '';
+                    badgeText = `${st.activeDepth} (${km} km · ${radiusTag} ≥ ${
+                      curveCheck.requiredMinRadiusM
+                    }m)${crossingTag} · ${formatCurrencyWan(info.cost, st.lang)}`;
+                  }
                 }
               }
 
