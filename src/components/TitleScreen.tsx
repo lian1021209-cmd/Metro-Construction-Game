@@ -362,7 +362,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
         <div className="space-y-8">
           <div className="space-y-4">
             <div className="flex items-center gap-2 text-xs text-slate-500">
-              <span>上海十六區真實地理邊界</span>
+              <span>上海啟航 · 全國省市區分級實景邊界</span>
               <span aria-hidden="true">·</span>
               <span>無網格自由軌道工程模擬</span>
             </div>
@@ -372,7 +372,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
             </h1>
 
             <p className="text-sm md:text-[15px] text-slate-600 max-w-lg leading-relaxed">
-              從人民廣場核心出發，跨越黃浦江與蘇州河劃設地下 B1–B5 與高架路網。結合實地街道命名與早晚高峰通勤分流演算，打造高覆蓋率的立體地鐵系統。
+              從 1990 年人民廣場核心出發，跨越黃浦江與長三角劃設地下 B1–B5 與高架路網，逐步解鎖全國各省、直轄市、自治區及港澳都市圈與高鐵轉乘樞紐。
             </p>
           </div>
 
@@ -398,8 +398,8 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
           <div className="pt-6 border-t border-slate-200/90 space-y-4 max-w-lg">
             <div className="grid grid-cols-3 gap-6">
               <div>
-                <div className="text-lg font-bold font-mono-tabular text-slate-950">16 區</div>
-                <div className="text-xs text-slate-500 mt-0.5">水陸與行政區界</div>
+                <div className="text-lg font-bold font-mono-tabular text-slate-950">全國聯網</div>
+                <div className="text-xs text-slate-500 mt-0.5">省市區三級實景疆域</div>
               </div>
               <div>
                 <div className="text-lg font-bold font-mono-tabular text-slate-950">EL / B1–B5</div>

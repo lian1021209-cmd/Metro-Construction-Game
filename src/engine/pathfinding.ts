@@ -267,7 +267,10 @@ export class TransitRouter {
   }
 }
 
-const cellDistrictIndexCache = new WeakMap<CityMap, Int16Array>();
+const cellDistrictIndexCache = new WeakMap<
+  CityMap,
+  { districtCount: number; indices: Int16Array }
+>();
 
 function pointInRingFast(px: number, py: number, ring: { x: number; y: number }[]): boolean {
   let inside = false;
@@ -285,7 +288,7 @@ function pointInRingFast(px: number, py: number, ring: { x: number; y: number }[
 
 function getCellDistrictIndices(map: CityMap): Int16Array {
   const cached = cellDistrictIndexCache.get(map);
-  if (cached) return cached;
+  if (cached && cached.districtCount === map.districts.length) return cached.indices;
 
   const bboxes = map.districts.map((d) => {
     const rings = (d.polygons ?? (d.polygon ? [d.polygon] : [])).filter((r) => r.length >= 3);
@@ -334,7 +337,7 @@ function getCellDistrictIndices(map: CityMap): Int16Array {
     }
     arr[i] = found;
   }
-  cellDistrictIndexCache.set(map, arr);
+  cellDistrictIndexCache.set(map, { districtCount: map.districts.length, indices: arr });
   return arr;
 }
 
@@ -352,6 +355,7 @@ export function recomputeMapCoverage(map: CityMap, stations: Station[]): {
   let landCells = 0;
 
   const districtIndices = map.districts.length > 0 ? getCellDistrictIndices(map) : null;
+  const yrdDistrictSet = new Set<number>();
 
   for (let i = 0; i < map.cells.length; i++) {
     map.cells[i].coveredByMetro = false;
@@ -366,16 +370,18 @@ export function recomputeMapCoverage(map: CityMap, stations: Station[]): {
     const minGy = Math.max(0, Math.floor((st.y - r) / cs));
     const maxGy = Math.min(map.rows - 1, Math.floor((st.y + r) / cs));
 
-    for (let gy = minGy; gy <= maxGy; gy++) {
-      const cy = (gy + 0.5) * cs;
-      const dy = cy - st.y;
-      const rowOffset = gy * map.cols;
-      for (let gx = minGx; gx <= maxGx; gx++) {
-        const cx = (gx + 0.5) * cs;
-        const dx = cx - st.x;
-        if (dx * dx + dy * dy <= rSq) {
-          const cell = map.cells[rowOffset + gx];
-          if (cell) cell.coveredByMetro = true;
+    if (minGx <= maxGx && minGy <= maxGy) {
+      for (let gy = minGy; gy <= maxGy; gy++) {
+        const cy = (gy + 0.5) * cs;
+        const dy = cy - st.y;
+        const rowOffset = gy * map.cols;
+        for (let gx = minGx; gx <= maxGx; gx++) {
+          const cx = (gx + 0.5) * cs;
+          const dx = cx - st.x;
+          if (dx * dx + dy * dy <= rSq) {
+            const cell = map.cells[rowOffset + gx];
+            if (cell) cell.coveredByMetro = true;
+          }
         }
       }
     }
@@ -384,6 +390,7 @@ export function recomputeMapCoverage(map: CityMap, stations: Station[]): {
   for (let i = 0; i < map.cells.length; i++) {
     const cell = map.cells[i];
     const dIdx = districtIndices ? districtIndices[i] : -1;
+    if (dIdx >= 0) yrdDistrictSet.add(dIdx);
     const isRegionUnlocked = dIdx === -1 ? true : Boolean(map.districts[dIdx]?.unlocked);
 
     if (isRegionUnlocked) {
@@ -400,17 +407,51 @@ export function recomputeMapCoverage(map: CityMap, stations: Station[]): {
     }
   }
 
+  // National coverage integration: unlocked districts outside the YRD grid
   let unlockedRealPop = 0;
   let hasRealPopData = false;
-  for (const d of map.districts) {
+  let extTotalPop = 0;
+  let extCoveredPop = 0;
+
+  const liveStations = stations.filter((s) => !s.isDraft);
+  for (let dIdx = 0; dIdx < map.districts.length; dIdx++) {
+    const d = map.districts[dIdx];
+    const distPop = typeof d.realPopulation === 'number' ? d.realPopulation : 0;
     if (typeof d.realPopulation === 'number') {
       hasRealPopData = true;
-      if (d.unlocked) unlockedRealPop += d.realPopulation;
+      if (d.unlocked) unlockedRealPop += distPop;
+    }
+    if (!d.unlocked || yrdDistrictSet.has(dIdx)) continue;
+    const outsideYrd = d.x < 0 || d.x > map.width || d.y < 0 || d.y > map.height;
+    if (!outsideYrd) continue;
+
+    const popW = Math.max(10000, distPop);
+    extTotalPop += popW;
+    // Estimate coverage of this non-YRD district by counting stations inside/near its territory
+    let localStationCatch = 0;
+    const urbanR = Math.max(80, d.radius * 0.85);
+    for (const st of liveStations) {
+      const dist = Math.hypot(st.x - d.x, st.y - d.y);
+      if (dist <= urbanR + st.catchmentRadius) {
+        const effAreaKm2 = Math.max(3, (st.catchmentRadius * 0.0495) ** 2 * Math.PI);
+        localStationCatch += effAreaKm2 * 22000;
+      }
+    }
+    if (localStationCatch > 0) {
+      extCoveredPop += Math.min(popW * 0.92, localStationCatch);
     }
   }
 
+  const yrdCovFrac = totalWeight > 0 ? coveredWeight / totalWeight : 0;
+  const yrdPopBase = Math.max(1, unlockedRealPop - extTotalPop);
+  const combinedTotal = yrdPopBase + extTotalPop;
+  const combinedCovered = yrdCovFrac * yrdPopBase + extCoveredPop;
+
   return {
-    coveragePercent: totalWeight > 0 ? Math.min(100, (coveredWeight / totalWeight) * 100) : 0,
+    coveragePercent:
+      combinedTotal > 0
+        ? Math.min(100, (combinedCovered / combinedTotal) * 100)
+        : 0,
     totalPopulation: hasRealPopData ? unlockedRealPop : totalPop,
     totalJobs: hasRealPopData ? Math.round(unlockedRealPop * 0.56) : totalJobs,
     avgCongestion: landCells > 0 ? (congestionSum / landCells) * 100 : 0,

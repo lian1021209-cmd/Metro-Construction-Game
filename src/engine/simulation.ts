@@ -17,6 +17,8 @@ import {
   TransitLine,
 } from '../types/game';
 import { getShortTurnRange, isStationExpressStop, TransitRouter } from './pathfinding';
+import { getLoadedUrbanCores } from './chinaGeoLoader';
+import { haversineKm, worldToLatLon } from './geo';
 
 export const DEFAULT_FARE_POLICY: FarePolicy = {
   baseFare: 2,
@@ -310,15 +312,37 @@ export function isWaterAt(
   return { isWater: false, reason: 'land' };
 }
 
-export function pixelsToKm(px: number, map?: CityMap): number {
+export function pixelsToKmAt(px: number, map?: CityMap, worldY?: number): number {
   if (map?.geoBounds) {
-    // At zoom 12.5 (~31 deg lat), ~105 world px ≈ 1 km
-    const latCos = Math.cos((map.geoBounds.centerLat * Math.PI) / 180);
+    const lat =
+      worldY !== undefined && Number.isFinite(worldY)
+        ? worldToLatLon(map.width * 0.5, worldY, map.geoBounds, map.width, map.height).lat
+        : map.geoBounds.centerLat;
+    const latCos = Math.cos((lat * Math.PI) / 180);
     const metersPerWorldPx =
-      (156543.03 * latCos) / Math.pow(2, map.geoBounds.defaultZoom);
+      (156543.033928 * latCos) / Math.pow(2, map.geoBounds.defaultZoom);
     return (px * metersPerWorldPx) / 1000;
   }
   return px * 0.011;
+}
+
+export function pixelsToKm(px: number, map?: CityMap): number {
+  return pixelsToKmAt(px, map);
+}
+
+export function measureWorldSegmentKm(
+  map: CityMap | undefined,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number
+): number {
+  if (map?.geoBounds) {
+    const a = worldToLatLon(x0, y0, map.geoBounds, map.width, map.height);
+    const b = worldToLatLon(x1, y1, map.geoBounds, map.width, map.height);
+    return haversineKm(a.lat, a.lon, b.lat, b.lon);
+  }
+  return pixelsToKm(Math.hypot(x1 - x0, y1 - y0), map);
 }
 
 export function computeProgressiveFare(distanceKm: number, policy: FarePolicy): number {
@@ -380,16 +404,40 @@ export function findNearestTrackSegment(
   const stationMap = new Map(stations.map((s) => [s.id, s]));
   let best: { segment: TrackSegment; t: number; point: { x: number; y: number }; dist: number } | null = null;
 
+  const STEPS = 48;
   for (const seg of segments) {
     const a = stationMap.get(seg.fromStationId);
     const b = stationMap.get(seg.toStationId);
     if (!a || !b) continue;
-    for (let i = 1; i <= 23; i++) {
-      const t = i / 24;
+    let segBestT = -1;
+    let segBestD = Infinity;
+    for (let i = 1; i < STEPS; i++) {
+      const t = i / STEPS;
       const p = evalQuadraticBezier(a.x, a.y, seg.controlX, seg.controlY, b.x, b.y, t);
       const d = Math.hypot(px - p.x, py - p.y);
-      if (d < maxDist && (!best || d < best.dist)) {
-        best = { segment: seg, t, point: { x: p.x, y: p.y }, dist: d };
+      if (d < segBestD) {
+        segBestD = d;
+        segBestT = t;
+      }
+    }
+    if (segBestT > 0 && segBestD < maxDist * 1.35) {
+      let lo = Math.max(0.01, segBestT - 1 / STEPS);
+      let hi = Math.min(0.99, segBestT + 1 / STEPS);
+      for (let iter = 0; iter < 8; iter++) {
+        const m1 = lo + (hi - lo) / 3;
+        const m2 = hi - (hi - lo) / 3;
+        const p1 = evalQuadraticBezier(a.x, a.y, seg.controlX, seg.controlY, b.x, b.y, m1);
+        const p2 = evalQuadraticBezier(a.x, a.y, seg.controlX, seg.controlY, b.x, b.y, m2);
+        const d1 = Math.hypot(px - p1.x, py - p1.y);
+        const d2 = Math.hypot(px - p2.x, py - p2.y);
+        if (d1 < d2) hi = m2;
+        else lo = m1;
+      }
+      const refinedT = (lo + hi) * 0.5;
+      const rp = evalQuadraticBezier(a.x, a.y, seg.controlX, seg.controlY, b.x, b.y, refinedT);
+      const rd = Math.hypot(px - rp.x, py - rp.y);
+      if (rd < maxDist && (!best || rd < best.dist)) {
+        best = { segment: seg, t: refinedT, point: { x: rp.x, y: rp.y }, dist: rd };
       }
     }
   }
@@ -407,7 +455,7 @@ export function estimateQuadraticLength(
   let len = 0;
   let px = x0;
   let py = y0;
-  const steps = 16;
+  const steps = 24;
   for (let i = 1; i <= steps; i++) {
     const p = evalQuadraticBezier(x0, y0, cx, cy, x1, y1, i / steps);
     len += Math.hypot(p.x - px, p.y - py);
@@ -417,9 +465,33 @@ export function estimateQuadraticLength(
   return len;
 }
 
+export function estimateQuadraticLengthKm(
+  map: CityMap | undefined,
+  x0: number,
+  y0: number,
+  cx: number,
+  cy: number,
+  x1: number,
+  y1: number
+): number {
+  if (!map?.geoBounds) {
+    return pixelsToKm(estimateQuadraticLength(x0, y0, cx, cy, x1, y1), map);
+  }
+  let km = 0;
+  let prevLL = worldToLatLon(x0, y0, map.geoBounds, map.width, map.height);
+  const steps = 24;
+  for (let i = 1; i <= steps; i++) {
+    const p = evalQuadraticBezier(x0, y0, cx, cy, x1, y1, i / steps);
+    const curLL = worldToLatLon(p.x, p.y, map.geoBounds, map.width, map.height);
+    km += haversineKm(prevLL.lat, prevLL.lon, curLL.lat, curLL.lon);
+    prevLL = curLL;
+  }
+  return km;
+}
+
 /**
  * Exact minimum radius of curvature (in meters) along a quadratic Bezier segment.
- * Straight tracks return Infinity.
+ * Uses local latitude Web Mercator scale so curvature checks stay accurate (<0.1%) nationwide.
  */
 export function computeBezierMinRadiusMeters(
   map: CityMap | undefined,
@@ -430,7 +502,8 @@ export function computeBezierMinRadiusMeters(
   x1: number,
   y1: number
 ): number {
-  const mPerPx = pixelsToKm(1, map) * 1000;
+  const midY = (y0 + 2 * cy + y1) * 0.25;
+  const mPerPx = pixelsToKmAt(1, map, midY) * 1000;
   const v0x = cx - x0;
   const v0y = cy - y0;
   const ax = x1 - 2 * cx + x0;
@@ -449,7 +522,7 @@ export function computeBezierMinRadiusMeters(
 
 /**
  * Evaluates effective turning radius (in meters) at an intermediate station junction `prev -> cur -> next`
- * using the arriving & departing Bezier end tangents and adjacent span lengths.
+ * using the arriving & departing Bezier end tangents and local-latitude-calibrated span lengths.
  */
 export function computeJunctionTurnRadiusMeters(
   map: CityMap | undefined,
@@ -464,7 +537,7 @@ export function computeJunctionTurnRadiusMeters(
   nextX: number,
   nextY: number
 ): number {
-  const mPerPx = pixelsToKm(1, map) * 1000;
+  const mPerPx = pixelsToKmAt(1, map, curY) * 1000;
   // Incoming tangent into cur: (cur - inCtrl), fallback (cur - prev)
   let inDx = curX - inCtrlX;
   let inDy = curY - inCtrlY;
@@ -508,7 +581,9 @@ export function computeNetworkMileageKm(
   for (const l of lines) {
     for (let i = 0; i < l.stationIds.length - 1; i++) {
       const s = segMap.get(`${l.stationIds[i]}_${l.stationIds[i + 1]}`);
-      if (s) totalKm += pixelsToKm(s.length, map);
+      if (s) {
+        totalKm += pixelsToKmAt(s.length, map, s.controlY);
+      }
     }
   }
   return totalKm;
@@ -686,11 +761,13 @@ export function analyzeTrackCrossing(
     if (isWaterAt(map, p.x, p.y).isWater) {
       waterHits++;
     }
-    const gx = Math.min(map.cols - 1, Math.max(0, Math.floor(p.x / map.cellSize)));
-    const gy = Math.min(map.rows - 1, Math.max(0, Math.floor(p.y / map.cellSize)));
-    const cell = map.cells[gy * map.cols + gx];
-    if (cell && cell.terrain === 'hill') {
-      hillHits++;
+    const gx = Math.floor(p.x / map.cellSize);
+    const gy = Math.floor(p.y / map.cellSize);
+    if (gx >= 0 && gx < map.cols && gy >= 0 && gy < map.rows) {
+      const cell = map.cells[gy * map.cols + gx];
+      if (cell && cell.terrain === 'hill') {
+        hillHits++;
+      }
     }
   }
 
@@ -699,7 +776,7 @@ export function analyzeTrackCrossing(
   const isUnderwater = crossesWater && depth !== 'EL';
 
   const length = estimateQuadraticLength(x0, y0, cx, cy, x1, y1);
-  const km = pixelsToKm(length, map);
+  const km = estimateQuadraticLengthKm(map, x0, y0, cx, cy, x1, y1);
   const depthCfg = DEPTH_LEVELS.find((d) => d.id === depth) ?? DEPTH_LEVELS[1];
 
   // ~6,500 萬元 / km base cost for underground B1 (~0.65億/km)
@@ -795,21 +872,63 @@ export function stepSimulation(
     const residentialStations: Station[] = [];
     const jobStations: Station[] = [];
 
+    const extraCores = getLoadedUrbanCores(map);
+
     for (const st of liveStations) {
-      const gx = Math.min(map.cols - 1, Math.max(0, Math.floor(st.x / map.cellSize)));
-      const gy = Math.min(map.rows - 1, Math.max(0, Math.floor(st.y / map.cellSize)));
+      const gx = Math.floor(st.x / map.cellSize);
+      const gy = Math.floor(st.y / map.cellSize);
       let localPop = 0;
       let localJobs = 0;
 
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const cx = gx + dx;
-          const cy = gy + dy;
-          if (cx >= 0 && cx < map.cols && cy >= 0 && cy < map.rows) {
-            const c = map.cells[cy * map.cols + cx];
-            localPop += c.population * c.landValue;
-            localJobs += c.jobs * c.landValue;
+      const inYrdGrid = gx >= 0 && gx < map.cols && gy >= 0 && gy < map.rows;
+      if (inYrdGrid) {
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const cx = gx + dx;
+            const cy = gy + dy;
+            if (cx >= 0 && cx < map.cols && cy >= 0 && cy < map.rows) {
+              const c = map.cells[cy * map.cols + cx];
+              localPop += c.population * c.landValue;
+              localJobs += c.jobs * c.landValue;
+            }
           }
+        }
+      } else {
+        // National mode outside YRD cell grid: synthesize realistic local density from containing district & urban cores
+        let hostDist: DistrictInfo | undefined;
+        for (const d of map.districts) {
+          if (pointInDistrict(d, st.x, st.y)) {
+            hostDist = d;
+            break;
+          }
+        }
+        const popScale = hostDist?.realPopulation
+          ? Math.min(2.6, Math.max(0.55, Math.sqrt(hostDist.realPopulation / 800000)))
+          : 1.0;
+        const growthScale = hostDist?.growthMultiplier ?? 1.25;
+        let coreScore = 0.3;
+        let coreType: 'cbd' | 'res' | 'ind' = 'res';
+        for (const c of extraCores) {
+          const dist = Math.hypot(st.x - c.wx, st.y - c.wy);
+          if (dist < c.radiusPx) {
+            const s = 1 - dist / c.radiusPx;
+            if (s > coreScore) {
+              coreScore = s;
+              coreType = c.type;
+            }
+          }
+        }
+        const todBonus = st.todProperty ? 1 + st.todProperty.level * 0.25 : 1;
+        const baseWeight = 2200 * popScale * growthScale * (0.65 + coreScore * 1.1) * todBonus;
+        if (coreType === 'cbd') {
+          localPop = baseWeight * 0.42;
+          localJobs = baseWeight * 0.85;
+        } else if (coreType === 'ind') {
+          localPop = baseWeight * 0.35;
+          localJobs = baseWeight * 0.78;
+        } else {
+          localPop = baseWeight * 0.82;
+          localJobs = baseWeight * 0.38;
         }
       }
 
@@ -840,8 +959,8 @@ export function stepSimulation(
         const route = router.findRoute(st.id, target.id);
         if (!route.reachable) continue;
 
-        // Price elasticity against progressive fare
-        const distKm = pixelsToKm(Math.hypot(target.x - st.x, target.y - st.y), map);
+        // Price elasticity against progressive fare (geodesic km)
+        const distKm = measureWorldSegmentKm(map, st.x, st.y, target.x, target.y);
         const estFare = computeProgressiveFare(distKm, farePolicy);
         const farePenalty = Math.max(0, (estFare - 3) * 0.08);
         if (
@@ -1089,7 +1208,7 @@ export function stepSimulation(
               if (wantsThisLine) {
                 const destSt = stationMap.get(wp.destinationId);
                 const distKm = destSt
-                  ? pixelsToKm(Math.hypot(destSt.x - arrivedStation.x, destSt.y - arrivedStation.y), map)
+                  ? measureWorldSegmentKm(map, arrivedStation.x, arrivedStation.y, destSt.x, destSt.y)
                   : 5;
                 const fareAmt = computeProgressiveFare(distKm * 1.15, farePolicy);
                 train.passengers.push({

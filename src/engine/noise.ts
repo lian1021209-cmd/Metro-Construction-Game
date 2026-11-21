@@ -616,8 +616,8 @@ export function generateCityMap(
   const hills: HillContour[] = [];
   const pois: CityPoi[] = [];
 
-  const mapName = '上海及江浙跨省都市圈 · 1990年';
-  const subtitle = '黃浦江 / 太湖 / 錢塘江 / 長江 · 上海市16區 + 江蘇13市·浙江11市（185縣區）層級解鎖';
+  const mapName = '上海啟航 · 全國軌道都市圈 · 1990年';
+  const subtitle = '黃浦江 / 長三角 / 全國各省市區及港澳分級聯動解鎖';
   const startYear = 1990;
   const geoBounds: GeoBounds = createGeoBounds(31.10, 119.65, 11.4, w, h);
 
@@ -631,15 +631,23 @@ export function generateCityMap(
 
   const addGeoPoi = (id: string, name: string, kind: CityPoi['kind'], lat: number, lon: number) => {
     const p = toWorld(lat, lon);
-    pois.push({ id, name, kind, x: Math.round(p.x), y: Math.round(p.y) });
+    pois.push({ id, name, kind, x: p.x, y: p.y });
   };
 
   // 1A. Neighboring Provinces & Progressive Cities Metadata with Survey-Grade Boundaries
   const provinces: ProvinceRegionInfo[] = NEIGHBOR_PROVINCES_WGS84.map((src) => {
     const pt = toWorld(src.gatewayCenter[0], src.gatewayCenter[1]);
     const polygons = src.rings.map((ring) => ring.map(([la, lo]) => toWorld(la, lo)));
+    const provCities = NEIGHBOR_CITIES_WGS84.filter((c) => c.provinceId === src.id);
+    const provDistricts = NEIGHBOR_DISTRICTS_WGS84.filter((d) => d.provinceId === src.id);
+    const closestCity = provCities.find((c) => c.id === src.closestCityId);
+    const closestDist = closestCity
+      ? provDistricts.find((d) => d.id === closestCity.closestDistrictId)
+      : undefined;
+    const provincePopulation = provDistricts.reduce((s, d) => s + (d.realPopulation ?? 0), 0);
     return {
       id: src.id,
+      adcode: src.adcode,
       name: src.name,
       x: pt.x,
       y: pt.y,
@@ -648,6 +656,13 @@ export function generateCityMap(
       unlockCostWan: src.unlockCostWan,
       unlocked: false,
       closestCityId: src.closestCityId,
+      closestCityName: closestCity?.name,
+      closestDistrictName: closestDist?.name,
+      provincePopulation,
+      cityCount: provCities.length,
+      districtCount: provDistricts.length,
+      loaded: true,
+      isTaiwan: false,
       description: src.description,
       polygons,
     };
@@ -907,14 +922,24 @@ export function generateCityMap(
       const nx = gx / cols;
       const ny = gy / rows;
 
+      const sampleOffsets = [
+        [0, 0],
+        [-0.33, 0], [0.33, 0], [0, -0.33], [0, 0.33],
+        [-0.33, -0.33], [0.33, -0.33], [-0.33, 0.33], [0.33, 0.33],
+      ];
       let insideLandDistrict = false;
-      for (const dc of districtChecks) {
-        if (wx < dc.minX || wx > dc.maxX || wy < dc.minY || wy > dc.maxY) continue;
-        for (const rb of dc.rings) {
-          if (wx >= rb.minX && wx <= rb.maxX && wy >= rb.minY && wy <= rb.maxY && isPointInRing(wx, wy, rb.ring)) {
-            insideLandDistrict = true;
-            break;
+      for (const [ox, oy] of sampleOffsets) {
+        const sx = wx + ox * cellSize;
+        const sy = wy + oy * cellSize;
+        for (const dc of districtChecks) {
+          if (sx < dc.minX || sx > dc.maxX || sy < dc.minY || sy > dc.maxY) continue;
+          for (const rb of dc.rings) {
+            if (sx >= rb.minX && sx <= rb.maxX && sy >= rb.minY && sy <= rb.maxY && isPointInRing(sx, sy, rb.ring)) {
+              insideLandDistrict = true;
+              break;
+            }
           }
+          if (insideLandDistrict) break;
         }
         if (insideLandDistrict) break;
       }

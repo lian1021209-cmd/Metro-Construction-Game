@@ -33,9 +33,9 @@ export const SetupModal: React.FC<SetupModalProps> = ({
       <div className="w-full max-w-xl bg-white border border-slate-200 rounded-xl shadow-[0_20px_50px_rgba(15,23,42,0.16)] overflow-hidden text-slate-900">
         <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
           <div>
-            <h2 className="text-base font-bold text-slate-900">開局設定與財政難度 · 上海全市</h2>
+            <h2 className="text-base font-bold text-slate-900">開局設定與財政難度 · 上海啟航全國聯網</h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              16 行政區真實地理邊界、黃浦江與蘇州河實景路網
+              以 1990 年上海十六區為起點，跨省分級解鎖全國各省市區及港澳軌道網
             </p>
           </div>
           <button
@@ -52,20 +52,20 @@ export const SetupModal: React.FC<SetupModalProps> = ({
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
                 <Globe2 className="w-4 h-4 text-blue-600" />
-                <span>上海全市 · 1990 年無地鐵時代</span>
+                <span>上海開局 · 1990 年無地鐵時代</span>
               </div>
               <span className="text-xs font-mono-tabular text-slate-500">
-                16 個區級行政區
+                全國分級聯動解鎖
               </span>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-slate-600">
               <div className="flex items-start gap-2">
                 <MapPin className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
-                <span>開局出生點：黃浦、徐匯、長寧、靜安、普陀、虹口、楊浦；其餘 9 區採資金解鎖制</span>
+                <span>開局開放中心七區；解鎖全國任意省/自治區/直轄市/港澳即自動連通最近市縣與區</span>
               </div>
               <div className="flex items-start gap-2">
                 <ShieldAlert className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
-                <span>海域與江河湖面禁止設站，僅限陸地設站與軌道跨河</span>
+                <span>海域與江河湖面禁止設站，僅限陸地設站與軌道跨江跨海</span>
               </div>
             </div>
           </div>

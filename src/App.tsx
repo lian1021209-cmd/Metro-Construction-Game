@@ -60,6 +60,12 @@ import {
   reverseGeocodeStationPlace,
   worldToLatLon,
 } from './engine/geo';
+import {
+  ensureProvinceChunkLoaded,
+  loadNationalProvinces,
+  purgeTaiwanFromMap,
+} from './engine/chinaGeoLoader';
+import { detectIsChinaUserSync, verifyChinaUserIpCountry } from './engine/regionPolicy';
 import { formatCurrencyWan } from './i18n/translations';
 import { TitleScreen } from './components/TitleScreen';
 import { MetroCanvas, MetroCanvasHandle } from './components/MetroCanvas';
@@ -155,8 +161,8 @@ function buildStarterNetwork(
     return {
       id,
       name,
-      x: Math.round(pos.x),
-      y: Math.round(pos.y),
+      x: pos.x,
+      y: pos.y,
       size,
       depth,
       elevationMode: elev.elevationMode,
@@ -347,6 +353,10 @@ export default function App() {
   const [realCityId, setRealCityId] = useState<RealCityId>('shanghai');
   const [difficultyId, setDifficultyId] = useState<DifficultyLevel>('normal');
   const difficulty = DIFFICULTIES[difficultyId];
+  const [isChinaUser, setIsChinaUser] = useState<boolean>(() => detectIsChinaUserSync());
+  const isChinaUserRef = useRef<boolean>(isChinaUser);
+  isChinaUserRef.current = isChinaUser;
+  const unlockingRef = useRef<boolean>(false);
 
   const [mapSeedKey, setMapSeedKey] = useState(`${initialMap.mode}_${initialMap.seed}`);
   const [mapVersion, setMapVersion] = useState(0);
@@ -545,12 +555,6 @@ export default function App() {
     hydrateRealCityOverpass(simDataRef.current.map);
   }, [hydrateRealCityOverpass]);
 
-  useEffect(() => {
-    if (!toast) return;
-    const timer = setTimeout(() => setToast(null), 2600);
-    return () => clearTimeout(timer);
-  }, [toast]);
-
   const syncUiSnapshots = useCallback(() => {
     const sim = simDataRef.current;
     const liveLines = sim.lines.filter((l) => !l.isDraft);
@@ -569,6 +573,43 @@ export default function App() {
     setMoney(timeRef.current.money);
     setStats(computeStatsObj(sim));
   }, [computeStatsObj]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const targetMap = simDataRef.current.map;
+    loadNationalProvinces(targetMap, isChinaUserRef.current).then((changed) => {
+      if (cancelled || !changed || simDataRef.current.map !== targetMap) return;
+      recomputeMapCoverage(targetMap, simDataRef.current.stations);
+      setMapVersion((v) => v + 1);
+      syncUiSnapshots();
+    });
+    verifyChinaUserIpCountry().then(async (verifiedIsCn) => {
+      if (cancelled || verifiedIsCn === isChinaUserRef.current) return;
+      isChinaUserRef.current = verifiedIsCn;
+      setIsChinaUser(verifiedIsCn);
+      const currentMap = simDataRef.current.map;
+      let changed = false;
+      if (!verifiedIsCn) {
+        changed = purgeTaiwanFromMap(currentMap);
+      } else {
+        changed = await loadNationalProvinces(currentMap, true);
+      }
+      if (!cancelled && changed && simDataRef.current.map === currentMap) {
+        recomputeMapCoverage(currentMap, simDataRef.current.stations);
+        setMapVersion((v) => v + 1);
+        syncUiSnapshots();
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [syncUiSnapshots]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 2600);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   const settleMonthlyFinances = useCallback(
     (sim: { map: CityMap; stations: Station[]; lines: TransitLine[] }) => {
@@ -1012,8 +1053,8 @@ export default function App() {
       if (draftMode) pushDraftUndo();
 
       const cfg = STATION_CONFIGS[stationSize];
-      const targetX = Math.round(wx);
-      const targetY = Math.round(wy);
+      const targetX = wx;
+      const targetY = wy;
       const initialName = suggestStationName(sim.map, targetX, targetY, sim.stations);
       const newStation: Station = {
         id: `st_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
@@ -1133,8 +1174,8 @@ export default function App() {
 
       const cfg = STATION_CONFIGS[stationSize];
       const elev = depthToDefaults(seg.depth);
-      const targetX = Math.round(split.mx);
-      const targetY = Math.round(split.my);
+      const targetX = split.mx;
+      const targetY = split.my;
       const initialName = suggestStationName(sim.map, targetX, targetY, sim.stations);
       const newStation: Station = {
         id: `st_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
@@ -1638,117 +1679,143 @@ export default function App() {
     [difficulty.costMultiplier, lang, showToast, syncUiSnapshots]
   );
 
-  const handleUnlockRegion = useCallback(
-    (kind: 'province' | 'city' | 'district', id: string) => {
-      const sim = simDataRef.current;
+  const handlePreloadProvinceChunk = useCallback(async (provinceId: string) => {
+    const sim = simDataRef.current;
+    const ok = await ensureProvinceChunkLoaded(sim.map, provinceId);
+    if (ok) {
+      setMapVersion((v) => v + 1);
+    }
+  }, []);
 
-      if (kind === 'province') {
-        const prov = sim.map.provinces?.find((p) => p.id === id);
-        if (!prov || prov.unlocked) return;
-        const cost = getProvinceUnlockCost(prov, difficulty);
-        if (timeRef.current.money < cost) {
-          soundEngine.playError();
-          showToast(`資金不足，解鎖「${prov.name}」需 ${formatCurrencyWan(cost, lang)}`);
+  const handleUnlockRegion = useCallback(
+    async (kind: 'province' | 'city' | 'district', id: string) => {
+      if (unlockingRef.current) return;
+      unlockingRef.current = true;
+      try {
+        const sim = simDataRef.current;
+
+        if (kind === 'province') {
+          const prov = sim.map.provinces?.find((p) => p.id === id);
+          if (!prov || prov.unlocked) return;
+          const cost = getProvinceUnlockCost(prov, difficulty);
+          if (timeRef.current.money < cost) {
+            soundEngine.playError();
+            showToast(`資金不足，解鎖「${prov.name}」需 ${formatCurrencyWan(cost, lang)}`);
+            return;
+          }
+          if (!prov.loaded) {
+            showToast(`正在載入「${prov.name}」省市區級地理資料...`);
+            const loaded = await ensureProvinceChunkLoaded(sim.map, id);
+            if (!loaded) {
+              soundEngine.playError();
+              showToast(`「${prov.name}」地理資料載入失敗，請稍後重試`);
+              return;
+            }
+          }
+          timeRef.current.money -= cost;
+          setMonthlyCapexWan((c) => c + cost);
+          const res = unlockRegionCascade(sim.map, 'province', id);
+          for (const c of res.unlockedCities) {
+            hydrateCityOverpassAt(sim.map, c.lat, c.lon);
+          }
+          if (sim.map.geoBounds) {
+            for (const d of res.unlockedDistricts) {
+              const ll = worldToLatLon(d.x, d.y, sim.map.geoBounds, sim.map.width, sim.map.height);
+              hydrateCityOverpassAt(sim.map, ll.lat, ll.lon);
+            }
+          }
+          recomputeMapCoverage(sim.map, sim.stations);
+          soundEngine.playTrackConnected();
+          setMapVersion((v) => v + 1);
+          syncUiSnapshots();
+          const cityLabel = res.unlockedCities.map((c) => c.name).join('、');
+          const distLabel = res.unlockedDistricts.map((d) => d.name).join('、');
+          showToast(
+            `已花費 ${formatCurrencyWan(cost, lang)} 解鎖「${prov.name}」${
+              cityLabel ? ` → 自動開放最近市「${cityLabel}」` : ''
+            }${distLabel ? ` → 自動開放最近區「${distLabel}」` : ''}`
+          );
           return;
         }
-        timeRef.current.money -= cost;
-        setMonthlyCapexWan((c) => c + cost);
-        const res = unlockRegionCascade(sim.map, 'province', id);
-        for (const c of res.unlockedCities) {
-          hydrateCityOverpassAt(sim.map, c.lat, c.lon);
-        }
-        if (sim.map.geoBounds) {
-          for (const d of res.unlockedDistricts) {
-            const ll = worldToLatLon(d.x, d.y, sim.map.geoBounds, sim.map.width, sim.map.height);
-            hydrateCityOverpassAt(sim.map, ll.lat, ll.lon);
-          }
-        }
-        soundEngine.playTrackConnected();
-        setMapVersion((v) => v + 1);
-        syncUiSnapshots();
-        const cityLabel = res.unlockedCities.map((c) => c.name).join('、');
-        const distLabel = res.unlockedDistricts.map((d) => d.name).join('、');
-        showToast(
-          `已花費 ${formatCurrencyWan(cost, lang)} 解鎖「${prov.name}」${
-            cityLabel ? ` → 自動開放最近市「${cityLabel}」` : ''
-          }${distLabel ? ` → 自動開放最近區「${distLabel}」` : ''}`
-        );
-        return;
-      }
 
-      if (kind === 'city') {
-        const city = sim.map.cities?.find((c) => c.id === id);
-        if (!city || city.unlocked) return;
-        const prereq = getCityUnlockPrereq(sim.map, city);
+        if (kind === 'city') {
+          const city = sim.map.cities?.find((c) => c.id === id);
+          if (!city || city.unlocked) return;
+          const prereq = getCityUnlockPrereq(sim.map, city);
+          if (!prereq.canUnlock) {
+            soundEngine.playError();
+            showToast(`需先解鎖「${prereq.blockedByName}」，再逐層開放「${city.name}」`);
+            return;
+          }
+          const cost = getCityUnlockCost(city, difficulty);
+          if (timeRef.current.money < cost) {
+            soundEngine.playError();
+            showToast(`資金不足，解鎖「${city.name}」需 ${formatCurrencyWan(cost, lang)}`);
+            return;
+          }
+          timeRef.current.money -= cost;
+          setMonthlyCapexWan((c) => c + cost);
+          const res = unlockRegionCascade(sim.map, 'city', id);
+          for (const c of res.unlockedCities) {
+            hydrateCityOverpassAt(sim.map, c.lat, c.lon);
+          }
+          if (sim.map.geoBounds) {
+            for (const d of res.unlockedDistricts) {
+              const ll = worldToLatLon(d.x, d.y, sim.map.geoBounds, sim.map.width, sim.map.height);
+              hydrateCityOverpassAt(sim.map, ll.lat, ll.lon);
+            }
+          }
+          recomputeMapCoverage(sim.map, sim.stations);
+          soundEngine.playTrackConnected();
+          setMapVersion((v) => v + 1);
+          syncUiSnapshots();
+          const distLabel = res.unlockedDistricts.map((d) => d.name).join('、');
+          showToast(
+            `已花費 ${formatCurrencyWan(cost, lang)} 解鎖「${city.name}」${
+              distLabel ? ` → 自動開放最近區「${distLabel}」` : ''
+            }`
+          );
+          return;
+        }
+
+        const dist = sim.map.districts.find((d) => d.id === id);
+        if (!dist || dist.unlocked) return;
+        const prereq = getDistrictUnlockPrereq(sim.map, dist);
         if (!prereq.canUnlock) {
           soundEngine.playError();
-          showToast(`需先解鎖「${prereq.blockedByName}」，再逐層開放「${city.name}」`);
+          showToast(`「${dist.name}」需先解鎖鄰近行政區「${prereq.blockedByName}」`);
           return;
         }
-        const cost = getCityUnlockCost(city, difficulty);
+
+        const cost = getDistrictUnlockCost(dist, difficulty);
         if (timeRef.current.money < cost) {
           soundEngine.playError();
-          showToast(`資金不足，解鎖「${city.name}」需 ${formatCurrencyWan(cost, lang)}`);
+          showToast(`資金不足，解鎖「${dist.name}」需 ${formatCurrencyWan(cost, lang)}`);
           return;
         }
+
         timeRef.current.money -= cost;
         setMonthlyCapexWan((c) => c + cost);
-        const res = unlockRegionCascade(sim.map, 'city', id);
-        for (const c of res.unlockedCities) {
-          hydrateCityOverpassAt(sim.map, c.lat, c.lon);
-        }
+        unlockRegionCascade(sim.map, 'district', id);
         if (sim.map.geoBounds) {
-          for (const d of res.unlockedDistricts) {
-            const ll = worldToLatLon(d.x, d.y, sim.map.geoBounds, sim.map.width, sim.map.height);
-            hydrateCityOverpassAt(sim.map, ll.lat, ll.lon);
-          }
+          const ll = worldToLatLon(dist.x, dist.y, sim.map.geoBounds, sim.map.width, sim.map.height);
+          hydrateCityOverpassAt(sim.map, ll.lat, ll.lon);
         }
+        recomputeMapCoverage(sim.map, sim.stations);
         soundEngine.playTrackConnected();
         setMapVersion((v) => v + 1);
         syncUiSnapshots();
-        const distLabel = res.unlockedDistricts.map((d) => d.name).join('、');
-        showToast(
-          `已花費 ${formatCurrencyWan(cost, lang)} 解鎖「${city.name}」${
-            distLabel ? ` → 自動開放最近區「${distLabel}」` : ''
-          }`
-        );
-        return;
+        showToast(`已花費 ${formatCurrencyWan(cost, lang)} 解鎖「${dist.name}」`);
+      } finally {
+        unlockingRef.current = false;
       }
-
-      const dist = sim.map.districts.find((d) => d.id === id);
-      if (!dist || dist.unlocked) return;
-      const prereq = getDistrictUnlockPrereq(sim.map, dist);
-      if (!prereq.canUnlock) {
-        soundEngine.playError();
-        showToast(`「${dist.name}」需先解鎖鄰近行政區「${prereq.blockedByName}」`);
-        return;
-      }
-
-      const cost = getDistrictUnlockCost(dist, difficulty);
-      if (timeRef.current.money < cost) {
-        soundEngine.playError();
-        showToast(`資金不足，解鎖「${dist.name}」需 ${formatCurrencyWan(cost, lang)}`);
-        return;
-      }
-
-      timeRef.current.money -= cost;
-      setMonthlyCapexWan((c) => c + cost);
-      unlockRegionCascade(sim.map, 'district', id);
-      if (sim.map.geoBounds) {
-        const ll = worldToLatLon(dist.x, dist.y, sim.map.geoBounds, sim.map.width, sim.map.height);
-        hydrateCityOverpassAt(sim.map, ll.lat, ll.lon);
-      }
-      soundEngine.playTrackConnected();
-      setMapVersion((v) => v + 1);
-      syncUiSnapshots();
-      showToast(`已花費 ${formatCurrencyWan(cost, lang)} 解鎖「${dist.name}」`);
     },
     [difficulty, hydrateCityOverpassAt, lang, showToast, syncUiSnapshots]
   );
 
   const handleUnlockDistrict = useCallback(
     (districtId: string) => {
-      handleUnlockRegion('district', districtId);
+      void handleUnlockRegion('district', districtId);
     },
     [handleUnlockRegion]
   );
@@ -1802,6 +1869,13 @@ export default function App() {
     setHistory([createHistoryEntry(newMap.startYear, 1, freshStats, [], [starterLine])]);
     syncUiSnapshots();
     hydrateRealCityOverpass(newMap);
+    loadNationalProvinces(newMap, isChinaUserRef.current).then((changed) => {
+      if (changed && simDataRef.current.map === newMap) {
+        recomputeMapCoverage(newMap, simDataRef.current.stations);
+        setMapVersion((v) => v + 1);
+        syncUiSnapshots();
+      }
+    });
     showToast(`已載入：${newMap.name} (${diffCfg.label})`);
   };
 
@@ -1872,6 +1946,7 @@ export default function App() {
             layers={layers}
             difficulty={difficulty}
             is25D={is25D}
+            includeTaiwan={isChinaUser}
             onPlaceStation={handlePlaceStation}
             onInsertStationOnSegment={handleInsertStationOnSegment}
             onSelectStation={setSelectedStationId}
@@ -2009,6 +2084,7 @@ export default function App() {
         history={history}
         onUnlockDistrict={handleUnlockDistrict}
         onUnlockRegion={handleUnlockRegion}
+        onPreloadProvinceChunk={handlePreloadProvinceChunk}
         onLocateDistrict={(x, y, label) => {
           setCityStatsOpen(false);
           canvasHandleRef.current?.focusAt(x, y, 1.15);

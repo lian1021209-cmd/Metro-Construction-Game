@@ -51,6 +51,8 @@ import {
   OpenMapStyleId,
   prefetchReverseGeocodePlace,
   preloadWorldPopHiRes,
+  WORLDPOP_CHINA_MAIN_BOUNDS,
+  WORLDPOP_TW_BOUNDS,
   worldToLatLon,
 } from '../engine/geo';
 import { suggestStationName } from '../engine/noise';
@@ -125,6 +127,7 @@ interface MetroCanvasProps {
   layers: LayerVisibility;
   difficulty: DifficultyConfig;
   is25D: boolean;
+  includeTaiwan?: boolean;
   onPlaceStation: (x: number, y: number) => void;
   onInsertStationOnSegment: (segmentId: string, t: number, wx: number, wy: number) => void;
   onSelectStation: (id: string | null) => void;
@@ -500,7 +503,7 @@ function upsertGeoJsonSource(
     ...(opts?.promoteId ? { promoteId: opts.promoteId } : {}),
     tolerance: opts?.tolerance ?? 0,
     buffer: opts?.buffer ?? 128,
-    maxzoom: opts?.maxzoom ?? 16,
+    maxzoom: opts?.maxzoom ?? 19,
   });
   return true;
 }
@@ -515,7 +518,8 @@ function syncMapLibreVectorLayers(
   styleId: OpenMapStyleId,
   isFallback: boolean,
   showPopHeatmap: boolean,
-  popHeatmapDataUrl: string | null
+  popHeatmapDataUrl: string | null,
+  includeTaiwan: boolean
 ) {
   if (!cityMap.geoBounds || !mlMap.getStyle()) return;
 
@@ -528,7 +532,7 @@ function syncMapLibreVectorLayers(
       upsertGeoJsonSource(mlMap, 'pure-land-geojson', landData, {
         tolerance: 0,
         buffer: 128,
-        maxzoom: 16,
+        maxzoom: 19,
       });
       if (!mlMap.getLayer('pure-land-fill')) {
         mlMap.addLayer({
@@ -556,7 +560,15 @@ function syncMapLibreVectorLayers(
     }
   }
 
-  // Smooth White -> Yellow -> Orange -> Red -> Magenta -> Purple WorldPop 2020 density raster
+  // Smooth White -> Yellow -> Orange -> Red -> Magenta -> Purple WorldPop 2020 density raster (YRD + Nationwide + Conditional Taiwan)
+  const beforeHeatmapTarget = mlMap.getLayer('city-water-polygons-fill')
+    ? 'city-water-polygons-fill'
+    : mlMap.getLayer('city-rivers-casing')
+    ? 'city-rivers-casing'
+    : mlMap.getLayer('city-regions-fill')
+    ? 'city-regions-fill'
+    : undefined;
+
   if (popHeatmapDataUrl) {
     const geo = cityMap.geoBounds;
     const tl = worldToLatLon(0, 0, geo, cityMap.width, cityMap.height);
@@ -581,13 +593,6 @@ function syncMapLibreVectorLayers(
     }
 
     if (!mlMap.getLayer('population-heatmap-layer')) {
-      const beforeLayer = mlMap.getLayer('city-water-polygons-fill')
-        ? 'city-water-polygons-fill'
-        : mlMap.getLayer('city-rivers-casing')
-        ? 'city-rivers-casing'
-        : mlMap.getLayer('city-regions-fill')
-        ? 'city-regions-fill'
-        : undefined;
       mlMap.addLayer(
         {
           id: 'population-heatmap-layer',
@@ -602,7 +607,7 @@ function syncMapLibreVectorLayers(
             'raster-fade-duration': 0,
           },
         },
-        beforeLayer
+        beforeHeatmapTarget
       );
     } else {
       mlMap.setPaintProperty('population-heatmap-layer', 'raster-opacity', isDark ? 0.68 : 0.7);
@@ -614,13 +619,105 @@ function syncMapLibreVectorLayers(
     }
   }
 
+  // Nationwide China mainland + HK/Macau smooth density raster
+  const cnBoundsCoords: [[number, number], [number, number], [number, number], [number, number]] = [
+    [WORLDPOP_CHINA_MAIN_BOUNDS.minLon, WORLDPOP_CHINA_MAIN_BOUNDS.maxLat],
+    [WORLDPOP_CHINA_MAIN_BOUNDS.maxLon, WORLDPOP_CHINA_MAIN_BOUNDS.maxLat],
+    [WORLDPOP_CHINA_MAIN_BOUNDS.maxLon, WORLDPOP_CHINA_MAIN_BOUNDS.minLat],
+    [WORLDPOP_CHINA_MAIN_BOUNDS.minLon, WORLDPOP_CHINA_MAIN_BOUNDS.minLat],
+  ];
+  if (!mlMap.getSource('population-china-heatmap-source')) {
+    mlMap.addSource('population-china-heatmap-source', {
+      type: 'image',
+      url: '/assets/worldpop_china_main_2020.png',
+      coordinates: cnBoundsCoords,
+    });
+  }
+  const chinaBefore = mlMap.getLayer('population-heatmap-layer')
+    ? 'population-heatmap-layer'
+    : beforeHeatmapTarget;
+  if (!mlMap.getLayer('population-china-heatmap-layer')) {
+    mlMap.addLayer(
+      {
+        id: 'population-china-heatmap-layer',
+        type: 'raster',
+        source: 'population-china-heatmap-source',
+        layout: {
+          visibility: showPopHeatmap ? 'visible' : 'none',
+        },
+        paint: {
+          'raster-opacity': isDark ? 0.65 : 0.68,
+          'raster-resampling': 'linear',
+          'raster-fade-duration': 0,
+        },
+      },
+      chinaBefore
+    );
+  } else {
+    mlMap.setPaintProperty('population-china-heatmap-layer', 'raster-opacity', isDark ? 0.65 : 0.68);
+    mlMap.setLayoutProperty(
+      'population-china-heatmap-layer',
+      'visibility',
+      showPopHeatmap ? 'visible' : 'none'
+    );
+  }
+
+  // Conditional Taiwan density raster (strictly only when includeTaiwan === true)
+  if (includeTaiwan) {
+    const twBoundsCoords: [[number, number], [number, number], [number, number], [number, number]] = [
+      [WORLDPOP_TW_BOUNDS.minLon, WORLDPOP_TW_BOUNDS.maxLat],
+      [WORLDPOP_TW_BOUNDS.maxLon, WORLDPOP_TW_BOUNDS.maxLat],
+      [WORLDPOP_TW_BOUNDS.maxLon, WORLDPOP_TW_BOUNDS.minLat],
+      [WORLDPOP_TW_BOUNDS.minLon, WORLDPOP_TW_BOUNDS.minLat],
+    ];
+    if (!mlMap.getSource('population-tw-heatmap-source')) {
+      mlMap.addSource('population-tw-heatmap-source', {
+        type: 'image',
+        url: '/assets/worldpop_tw_2020.png',
+        coordinates: twBoundsCoords,
+      });
+    }
+    if (!mlMap.getLayer('population-tw-heatmap-layer')) {
+      mlMap.addLayer(
+        {
+          id: 'population-tw-heatmap-layer',
+          type: 'raster',
+          source: 'population-tw-heatmap-source',
+          layout: {
+            visibility: showPopHeatmap ? 'visible' : 'none',
+          },
+          paint: {
+            'raster-opacity': isDark ? 0.65 : 0.68,
+            'raster-resampling': 'linear',
+            'raster-fade-duration': 0,
+          },
+        },
+        chinaBefore
+      );
+    } else {
+      mlMap.setPaintProperty('population-tw-heatmap-layer', 'raster-opacity', isDark ? 0.65 : 0.68);
+      mlMap.setLayoutProperty(
+        'population-tw-heatmap-layer',
+        'visibility',
+        showPopHeatmap ? 'visible' : 'none'
+      );
+    }
+  } else {
+    if (mlMap.getLayer('population-tw-heatmap-layer')) {
+      mlMap.removeLayer('population-tw-heatmap-layer');
+    }
+    if (mlMap.getSource('population-tw-heatmap-source')) {
+      mlMap.removeSource('population-tw-heatmap-source');
+    }
+  }
+
   if (useVectorBase) {
     const waterPolys = buildWaterPolygonsGeoJson(cityMap);
     if (waterPolys.features.length > 0) {
       upsertGeoJsonSource(mlMap, 'city-water-polygons-geojson', waterPolys, {
         tolerance: 0,
         buffer: 128,
-        maxzoom: 16,
+        maxzoom: 19,
       });
       if (!mlMap.getLayer('city-water-polygons-fill')) {
         mlMap.addLayer({
@@ -652,7 +749,7 @@ function syncMapLibreVectorLayers(
       upsertGeoJsonSource(mlMap, 'city-rivers-geojson', riversData, {
         tolerance: 0,
         buffer: 128,
-        maxzoom: 16,
+        maxzoom: 19,
       });
       if (!mlMap.getLayer('city-rivers-casing')) {
         mlMap.addLayer({
@@ -690,7 +787,7 @@ function syncMapLibreVectorLayers(
     promoteId: 'regionId',
     tolerance: 0,
     buffer: 128,
-    maxzoom: 16,
+    maxzoom: 19,
   });
 
   if (!mlMap.getLayer('city-regions-fill')) {
@@ -831,6 +928,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       layers,
       difficulty,
       is25D,
+      includeTaiwan = false,
       onPlaceStation,
       onInsertStationOnSegment,
       onSelectStation,
@@ -900,6 +998,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       layers,
       difficulty,
       is25D,
+      includeTaiwan,
     });
 
     uiRef.current = {
@@ -915,6 +1014,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       layers,
       difficulty,
       is25D,
+      includeTaiwan,
     };
 
     const hasGeo = Boolean(simDataRef.current.map.geoBounds);
@@ -945,8 +1045,8 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
           pitch: uiRef.current.is25D ? 44 : 0,
           bearing: uiRef.current.is25D ? -10 : 0,
         },
-        minZoom: 5.0,
-        maxZoom: 16.0,
+        minZoom: 3.2,
+        maxZoom: 19.5,
         maxPitch: 60,
         interactive: false,
         attributionControl: false,
@@ -983,7 +1083,8 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
           uiRef.current.openMapStyle,
           pureVectorFallbackRef.current,
           uiRef.current.layers.populationHeatmap,
-          hm?.dataUrl ?? null
+          hm?.dataUrl ?? null,
+          Boolean(uiRef.current.includeTaiwan)
         );
       });
 
@@ -996,7 +1097,8 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
           uiRef.current.openMapStyle,
           pureVectorFallbackRef.current,
           uiRef.current.layers.populationHeatmap,
-          hm?.dataUrl ?? null
+          hm?.dataUrl ?? null,
+          Boolean(uiRef.current.includeTaiwan)
         );
       });
 
@@ -1059,7 +1161,8 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               uiRef.current.openMapStyle,
               pureVectorFallbackRef.current,
               uiRef.current.layers.populationHeatmap,
-              dataUrl
+              dataUrl,
+              Boolean(uiRef.current.includeTaiwan)
             );
           } catch {
             // style not loaded yet; style.load will pick up popHeatmapRef
@@ -1098,7 +1201,8 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
             uiRef.current.openMapStyle,
             pureVectorFallbackRef.current,
             uiRef.current.layers.populationHeatmap,
-            dataUrl
+            dataUrl,
+            Boolean(includeTaiwan)
           );
           return;
         } catch {
@@ -1112,25 +1216,29 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
           uiRef.current.openMapStyle,
           pureVectorFallbackRef.current,
           uiRef.current.layers.populationHeatmap,
-          popHeatmapRef.current?.dataUrl ?? null
+          popHeatmapRef.current?.dataUrl ?? null,
+          Boolean(includeTaiwan)
         );
       };
       mlMap.once('style.load', onStyleReady);
       return () => {
         mlMap.off('style.load', onStyleReady);
       };
-    }, [mapSeedKey, mapVersion]);
+    }, [mapSeedKey, mapVersion, includeTaiwan]);
 
     // Toggle GPU population heatmap visibility immediately without rebuilding layers
     useEffect(() => {
       const mlMap = mlMapRef.current;
       if (!mlMap || !simDataRef.current.map.geoBounds) return;
-      if (mlMap.getLayer('population-heatmap-layer')) {
-        mlMap.setLayoutProperty(
-          'population-heatmap-layer',
-          'visibility',
-          layers.populationHeatmap ? 'visible' : 'none'
-        );
+      const vis = layers.populationHeatmap ? 'visible' : 'none';
+      for (const lid of [
+        'population-heatmap-layer',
+        'population-china-heatmap-layer',
+        'population-tw-heatmap-layer',
+      ]) {
+        if (mlMap.getLayer(lid)) {
+          mlMap.setLayoutProperty(lid, 'visibility', vis);
+        }
       }
     }, [layers.populationHeatmap]);
 
@@ -1184,7 +1292,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       zoomBy: (factor: number) => {
         const mlMap = mlMapRef.current;
         if (mlMap && simDataRef.current.map.geoBounds) {
-          const nextZ = Math.min(16.0, Math.max(5.0, mlMap.getZoom() + Math.log2(factor)));
+          const nextZ = Math.min(19.5, Math.max(3.2, mlMap.getZoom() + Math.log2(factor)));
           mlMap.easeTo({ zoom: nextZ, duration: 220 });
           return;
         }
@@ -1194,7 +1302,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
         const cx = rect.width / 2;
         const cy = rect.height / 2;
         const cam = cameraRef.current;
-        const nextZoom = Math.min(2.8, Math.max(0.25, cam.zoom * factor));
+        const nextZoom = Math.min(4.0, Math.max(0.25, cam.zoom * factor));
         cam.x = cx - ((cx - cam.x) / cam.zoom) * nextZoom;
         cam.y = cy - ((cy - cam.y) / cam.zoom) * nextZoom;
         cam.zoom = nextZoom;
@@ -1208,7 +1316,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
           mlMap.easeTo({
             center: [ll.lon, ll.lat],
             zoom: Math.min(
-              16.0,
+              19.5,
               Math.max(mlMap.getZoom(), targetZoom ? geo.defaultZoom + Math.log2(targetZoom) : 13.5)
             ),
             duration: 500,
@@ -1334,17 +1442,17 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
             let visMaxY = (h - cam.y) / cam.zoom + 160;
 
             if (geo && mlMap) {
-              const p0 = proj(st.map.width * 0.5, st.map.height * 0.5);
-              const p1 = proj(st.map.width * 0.5 + 100, st.map.height * 0.5);
-              const stepDist = Math.hypot(p1.x - p0.x, p1.y - p0.y);
-              pxScale = Number.isFinite(stepDist) ? Math.max(0.14, stepDist / 100) : 1;
-              zoomRatio = Math.pow(2, mlMap.getZoom() - geo.defaultZoom);
-
               const centerLL = mlMap.unproject([w * 0.5, h * 0.5]);
               const centerW =
                 Number.isFinite(centerLL.lat) && Number.isFinite(centerLL.lng)
                   ? latLonToWorld(centerLL.lat, centerLL.lng, geo, st.map.width, st.map.height)
                   : { x: st.map.width * 0.5, y: st.map.height * 0.5 };
+              const p0 = proj(centerW.x, centerW.y);
+              const p1 = proj(centerW.x + 0.25, centerW.y);
+              const stepDist = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+              pxScale = Number.isFinite(stepDist) ? Math.max(0.14, stepDist / 0.25) : 1;
+              zoomRatio = Math.pow(2, mlMap.getZoom() - geo.defaultZoom);
+
               const maxSpan = Math.max(
                 st.map.width * 1.4,
                 (Math.max(w, h) / Math.max(0.08, pxScale)) * 2.6
@@ -1382,35 +1490,39 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               Math.abs(pt.x) < w * 6 + 4000 &&
               Math.abs(pt.y) < h * 6 + 4000;
 
-            // 1. Non-geo base terrain canvas OR Pure Canvas GeoJSON River Labels + Streets (polygons live on MapLibre WebGL)
+            // 1. Non-geo base terrain canvas OR Pure Canvas GeoJSON River Labels + High-Detail OSM Streets (1:1000)
+            const currentMlZoom = mlMap ? mlMap.getZoom() : 11;
             if (!isGeoActive && baseMapCanvasRef.current) {
               ctx.save();
               ctx.translate(cam.x, cam.y);
               ctx.scale(cam.zoom, cam.zoom);
               ctx.drawImage(baseMapCanvasRef.current, 0, 0);
               ctx.restore();
-            } else if (isGeoActive && pureVectorFallbackRef.current) {
-              // River name labels over MapLibre WebGL rivers
-              for (const rv of st.map.rivers) {
-                const mid = rv.points[Math.floor(rv.points.length / 2)];
-                if (!mid) continue;
-                const msp = proj(mid.x, mid.y);
-                if (!isSaneScreenPt(msp) || msp.x < -120 || msp.x > w + 120 || msp.y < -120 || msp.y > h + 120) {
-                  continue;
+            } else if (isGeoActive && (pureVectorFallbackRef.current || currentMlZoom >= 15.2)) {
+              if (pureVectorFallbackRef.current) {
+                for (const rv of st.map.rivers) {
+                  const mid = rv.points[Math.floor(rv.points.length / 2)];
+                  if (!mid) continue;
+                  const msp = proj(mid.x, mid.y);
+                  if (!isSaneScreenPt(msp) || msp.x < -120 || msp.x > w + 120 || msp.y < -120 || msp.y > h + 120) {
+                    continue;
+                  }
+                  ctx.save();
+                  ctx.font = '500 12px "Noto Sans TC", sans-serif';
+                  ctx.fillStyle = isDarkMap ? 'rgba(148, 163, 184, 0.45)' : 'rgba(51, 65, 85, 0.55)';
+                  ctx.textAlign = 'center';
+                  ctx.textBaseline = 'middle';
+                  ctx.fillText(rv.name, msp.x, msp.y);
+                  ctx.restore();
                 }
-                ctx.save();
-                ctx.font = '500 12px "Noto Sans TC", sans-serif';
-                ctx.fillStyle = isDarkMap ? 'rgba(148, 163, 184, 0.45)' : 'rgba(51, 65, 85, 0.55)';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                ctx.fillText(rv.name, msp.x, msp.y);
-                ctx.restore();
               }
 
-              // Crisp real streets over WebGL land base
+              // Crisp OSM streets over vector land OR at high zoom (1:1000 over Esri tiles)
               ctx.save();
-              ctx.strokeStyle = isDarkMap ? 'rgba(98, 105, 115, 0.55)' : 'rgba(148, 163, 184, 0.36)';
-              ctx.lineWidth = 1.3;
+              ctx.strokeStyle = pureVectorFallbackRef.current
+                ? isDarkMap ? 'rgba(98, 105, 115, 0.55)' : 'rgba(148, 163, 184, 0.36)'
+                : isDarkMap ? 'rgba(148, 163, 184, 0.24)' : 'rgba(100, 116, 139, 0.22)';
+              ctx.lineWidth = currentMlZoom >= 17.5 ? 1.8 : 1.3;
               for (const road of st.map.roads) {
                 if (
                   Math.max(road.x1, road.x2) < visMinX ||
@@ -1939,12 +2051,20 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               const closestDist = closestCity
                 ? st.map.districts.find((d) => d.id === closestCity.closestDistrictId)
                 : undefined;
+              const cName = closestCity?.name ?? prov.closestCityName;
+              const dName = closestDist?.name ?? prov.closestDistrictName;
               const chainHint =
-                closestCity && closestDist
-                  ? `（解鎖含${closestCity.name}→${closestDist.name}）`
+                cName && dName && zoomRatio >= 0.08
+                  ? `（解鎖含${cName}→${dName}）`
                   : '';
-              const label = `🔒 ${prov.name}${chainHint} · ${formatCurrencyWan(unlockCost, ui.lang)}`;
-              drawLockBadge('province', prov.id, p.x, p.y, label, { ready: true, prominent: true });
+              const label =
+                zoomRatio < 0.04
+                  ? `🔒 ${prov.name}`
+                  : `🔒 ${prov.name}${chainHint} · ${formatCurrencyWan(unlockCost, ui.lang)}`;
+              drawLockBadge('province', prov.id, p.x, p.y, label, {
+                ready: true,
+                prominent: zoomRatio >= 0.08,
+              });
               ctx.restore();
             }
 
@@ -2064,7 +2184,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                 const cx = (seg ? seg.controlX : (stA.x + stB.x) / 2) + nx;
                 const cy = (seg ? seg.controlY : (stA.y + stB.y) / 2) + ny;
 
-                const curveSamples = 12;
+                const curveSamples = 36;
                 const screenPts: { x: number; y: number }[] = [];
                 for (let s = 0; s <= curveSamples; s++) {
                   const ptW = evalQuadraticBezier(
@@ -2177,8 +2297,8 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                   ctrlY
                 );
                 const previewPts: { x: number; y: number }[] = [];
-                for (let s = 0; s <= 12; s++) {
-                  const pW = evalQuadraticBezier(startSt.x, startSt.y, ctrlX, ctrlY, endX, endY, s / 12);
+                for (let s = 0; s <= 36; s++) {
+                  const pW = evalQuadraticBezier(startSt.x, startSt.y, ctrlX, ctrlY, endX, endY, s / 36);
                   previewPts.push(proj(pW.x, pW.y));
                 }
                 if (!previewPts.some((p) => !isSaneScreenPt(p))) {
@@ -2600,13 +2720,13 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                   Number.isFinite(ll2.lat) &&
                   Number.isFinite(ll2.lng)
                 ) {
-                  kmPerScreenPx = Math.max(0.0001, haversineKm(ll1.lat, ll1.lng, ll2.lat, ll2.lng) / 100);
+                  kmPerScreenPx = Math.max(0.00001, haversineKm(ll1.lat, ll1.lng, ll2.lat, ll2.lng) / 100);
                 }
               } else {
-                kmPerScreenPx = Math.max(0.0001, pixelsToKm(1, st.map) / cam.zoom);
+                kmPerScreenPx = Math.max(0.00001, pixelsToKm(1, st.map) / cam.zoom);
               }
               const rawKm = 96 * kmPerScreenPx;
-              const niceStepsKm = [0.2, 0.5, 1, 2, 5, 10, 20, 50, 100];
+              const niceStepsKm = [0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500];
               let bestKm = 1;
               for (const sKm of niceStepsKm) {
                 if (sKm <= rawKm * 1.35) bestKm = sKm;
@@ -2692,9 +2812,9 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
         if (near) {
           onSelectStation(near.id);
         } else {
-          const p0 = projectWorldToScreen(mapWidth * 0.5, mapHeight * 0.5);
-          const p1 = projectWorldToScreen(mapWidth * 0.5 + 100, mapHeight * 0.5);
-          const pxScale = Math.max(0.2, Math.hypot(p1.x - p0.x, p1.y - p0.y) / 100);
+          const p0 = projectWorldToScreen(wx, wy);
+          const p1 = projectWorldToScreen(wx + 0.25, wy);
+          const pxScale = Math.max(0.2, Math.hypot(p1.x - p0.x, p1.y - p0.y) / 0.25);
           const snap = findNearestTrackSegment(
             wx,
             wy,
@@ -2867,7 +2987,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       const mlMap = mlMapRef.current;
       if (mlMap && simDataRef.current.map.geoBounds) {
         const around = mlMap.unproject([sx, sy]);
-        const nextZoom = Math.min(16.0, Math.max(5.0, mlMap.getZoom() + (e.deltaY < 0 ? 0.35 : -0.35)));
+        const nextZoom = Math.min(19.5, Math.max(3.2, mlMap.getZoom() + (e.deltaY < 0 ? 0.35 : -0.35)));
         mlMap.zoomTo(nextZoom, { around, duration: 0 });
         return;
       }

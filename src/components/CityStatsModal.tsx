@@ -47,6 +47,7 @@ interface CityStatsModalProps {
   history: HistorySnapshot[];
   onUnlockDistrict: (districtId: string) => void;
   onUnlockRegion?: (kind: 'province' | 'city' | 'district', id: string) => void;
+  onPreloadProvinceChunk?: (provinceId: string) => void | Promise<void>;
   onLocateDistrict?: (x: number, y: number, label: string) => void;
 }
 
@@ -89,11 +90,13 @@ export const CityStatsModal: React.FC<CityStatsModalProps> = ({
   history,
   onUnlockDistrict,
   onUnlockRegion,
+  onPreloadProvinceChunk,
   onLocateDistrict,
 }) => {
   const [tab, setTab] = useState<'overview' | 'traffic' | 'economy' | 'chronicle' | 'features' | 'rating'>('overview');
   const [regionQuery, setRegionQuery] = useState('');
   const [regionFilter, setRegionFilter] = useState<'all' | 'unlockable' | 'unlocked'>('all');
+  const [expandedProvinces, setExpandedProvinces] = useState<Record<string, boolean>>({});
   const [expandedCities, setExpandedCities] = useState<Record<string, boolean>>({});
 
   if (!open) return null;
@@ -455,13 +458,23 @@ export const CityStatsModal: React.FC<CityStatsModalProps> = ({
                 </div>
               </div>
 
-              {/* Neighboring Provinces Section */}
-              {(map.provinces?.length ?? 0) > 0 && (
+              {/* Nationwide Provinces Section */}
+              {(map.provinces?.length ?? 0) > 0 && (() => {
+                const totalNationalProvs = map.provinces!.length;
+                const totalNationalCities =
+                  map.provinces!.reduce((s, p) => s + (p.cityCount ?? 0), 0) ||
+                  (map.cities ?? []).length;
+                const totalNationalDists =
+                  map.provinces!.reduce((s, p) => s + (p.districtCount ?? 0), 0) ||
+                  map.districts.filter((d) => d.provinceId && d.provinceId !== 'prov_sh').length;
+                const loadedDistCount = map.districts.filter((d) => d.unlocked).length;
+
+                return (
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <h3 className="text-xs font-bold tracking-wide text-slate-700 flex items-center gap-1.5">
                       <Compass className="w-3.5 h-3.5 text-blue-600" />
-                      跨省都市圈層級擴張（江蘇省 13 市 · 浙江省 11 市 · 共 185 縣區）
+                      全國都市圈層級擴張（{totalNationalProvs} 省區市 · {totalNationalCities} 市 · 共 {totalNationalDists} 區縣，已開放 {loadedDistCount} 區）
                     </h3>
                     <span className="text-[11px] text-slate-500 font-mono-tabular">
                       省 → 最近市 → 最近區
@@ -479,6 +492,8 @@ export const CityStatsModal: React.FC<CityStatsModalProps> = ({
                       const closestDist = closestCity
                         ? map.districts.find((d) => d.id === closestCity.closestDistrictId)
                         : undefined;
+                      const previewCityName = closestCity?.name ?? prov.closestCityName;
+                      const previewDistName = closestDist?.name ?? prov.closestDistrictName;
 
                       const visibleCities = provCities.filter((city) => {
                         const cityPrereq = getCityUnlockPrereq(map, city);
@@ -499,9 +514,21 @@ export const CityStatsModal: React.FC<CityStatsModalProps> = ({
                         return true;
                       });
 
-                      if (q && visibleCities.length === 0 && !prov.name.includes(q)) {
+                      const matchesProvMeta =
+                        !q ||
+                        prov.name.includes(q) ||
+                        Boolean(previewCityName?.includes(q)) ||
+                        Boolean(previewDistName?.includes(q));
+
+                      if (regionFilter === 'unlocked' && !prov.unlocked) return null;
+                      if (q && visibleCities.length === 0 && !matchesProvMeta) {
                         return null;
                       }
+
+                      const isProvExpanded =
+                        expandedProvinces[prov.id] ?? (prov.unlocked || Boolean(q && visibleCities.length > 0));
+                      const displayCityTotal = provCities.length > 0 ? provCities.length : (prov.cityCount ?? 0);
+                      const unlockedCityCount = provCities.filter((c) => c.unlocked).length;
 
                       return (
                         <div
@@ -514,11 +541,28 @@ export const CityStatsModal: React.FC<CityStatsModalProps> = ({
                         >
                           {/* Province Banner */}
                           <div className="p-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-white">
-                            <div className="min-w-0 space-y-1">
-                              <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const next = !isProvExpanded;
+                                setExpandedProvinces((prev) => ({ ...prev, [prov.id]: next }));
+                                if (next && prov.loaded === false) {
+                                  void onPreloadProvinceChunk?.(prov.id);
+                                }
+                              }}
+                              className="min-w-0 flex-1 text-left space-y-1 cursor-pointer"
+                            >
+                              <div className="flex flex-wrap items-center gap-2">
+                                {isProvExpanded ? (
+                                  <ChevronDown className="w-4 h-4 text-slate-400 shrink-0" />
+                                ) : (
+                                  <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+                                )}
                                 <span className="text-sm font-bold text-slate-900">{prov.name}</span>
                                 <span className="text-[11px] font-mono-tabular text-slate-400">
-                                  {provCities.filter((c) => c.unlocked).length}/{provCities.length} 市
+                                  {unlockedCityCount}/{displayCityTotal} 市
+                                  {prov.districtCount ? ` · ${prov.districtCount} 區縣` : ''}
+                                  {prov.provincePopulation ? ` · ${formatPop(prov.provincePopulation, lang)}` : ''}
                                 </span>
                                 {prov.unlocked ? (
                                   <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
@@ -530,18 +574,18 @@ export const CityStatsModal: React.FC<CityStatsModalProps> = ({
                                   </span>
                                 )}
                               </div>
-                              <p className="text-[11px] text-slate-500">{prov.description}</p>
-                              {!prov.unlocked && closestCity && closestDist && (
-                                <div className="flex items-center gap-1.5 text-[11px] text-blue-700 font-medium pt-0.5">
+                              <p className="text-[11px] text-slate-500 pl-6">{prov.description}</p>
+                              {!prov.unlocked && previewCityName && previewDistName && (
+                                <div className="flex items-center gap-1.5 text-[11px] text-blue-700 font-medium pt-0.5 pl-6">
                                   <span>聯動開啟：</span>
                                   <span>{prov.name}</span>
                                   <ArrowRight className="w-3 h-3" />
-                                  <span>{closestCity.name}（最近市）</span>
+                                  <span>{previewCityName}（最近市）</span>
                                   <ArrowRight className="w-3 h-3" />
-                                  <span>{closestDist.name}（最近區）</span>
+                                  <span>{previewDistName}（最近區）</span>
                                 </div>
                               )}
-                            </div>
+                            </button>
 
                             <div className="flex items-center gap-2 shrink-0">
                               {onLocateDistrict && (
@@ -568,7 +612,13 @@ export const CityStatsModal: React.FC<CityStatsModalProps> = ({
                           </div>
 
                           {/* Cities inside Province */}
+                          {isProvExpanded && (
                           <div className="p-3 space-y-2">
+                            {prov.loaded === false && provCities.length === 0 && (
+                              <div className="px-3 py-4 text-center text-[11px] text-slate-500">
+                                正在載入 {prov.name} 市級與區縣疆域數據...
+                              </div>
+                            )}
                             {visibleCities.map((city) => {
                               const cityCost = getCityUnlockCost(city, difficulty);
                               const cityPrereq = getCityUnlockPrereq(map, city);
@@ -733,12 +783,14 @@ export const CityStatsModal: React.FC<CityStatsModalProps> = ({
                               );
                             })}
                           </div>
+                          )}
                         </div>
                       );
                     })}
                   </div>
                 </div>
-              )}
+                );
+              })()}
 
               {/* Shanghai 16 Districts Section */}
               <div className="space-y-2.5">

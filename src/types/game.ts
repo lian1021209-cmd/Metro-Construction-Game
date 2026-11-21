@@ -48,6 +48,7 @@ export interface CityPoi {
 
 export interface DistrictInfo {
   id: string;
+  adcode?: string;
   name: string;
   x: number;
   y: number;
@@ -68,10 +69,12 @@ export interface DistrictInfo {
   prereqDistrictId?: string;
   adjacentDistrictIds?: string[];
   isCityClosestToShanghai?: boolean;
+  isTaiwan?: boolean;
 }
 
 export interface ProvinceRegionInfo {
   id: string;
+  adcode?: string;
   name: string;
   x: number;
   y: number;
@@ -81,11 +84,19 @@ export interface ProvinceRegionInfo {
   unlockCostWan: number;
   unlocked: boolean;
   closestCityId: string;
+  closestCityName?: string;
+  closestDistrictName?: string;
+  provincePopulation?: number;
+  cityCount?: number;
+  districtCount?: number;
+  loaded?: boolean;
+  isTaiwan?: boolean;
   description: string;
 }
 
 export interface CityRegionInfo {
   id: string;
+  adcode?: string;
   name: string;
   provinceId: string;
   x: number;
@@ -100,6 +111,7 @@ export interface CityRegionInfo {
   prereqCityId?: string;
   closestDistrictId: string;
   distanceKmFromShanghai: number;
+  isTaiwan?: boolean;
 }
 
 export interface RoadSegment {

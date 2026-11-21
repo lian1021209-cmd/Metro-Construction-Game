@@ -1262,6 +1262,16 @@ export function buildPopulationHeatmapCanvas(cityMap: CityMap): HTMLCanvasElemen
   return canvas;
 }
 
+export const WORLDPOP_CHINA_MAIN_BOUNDS = {
+  minLon: 73.0,
+  maxLon: 135.5,
+  minLat: 17.8,
+  maxLat: 53.8,
+} as const;
 
-
-
+export const WORLDPOP_TW_BOUNDS = {
+  minLon: 118.1,
+  maxLon: 122.2,
+  minLat: 21.7,
+  maxLat: 26.5,
+} as const;

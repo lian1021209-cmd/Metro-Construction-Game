@@ -298,7 +298,7 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
         list.push({ id: `d_${d.id}`, label: d.name, kind: kindLabel, x: d.x, y: d.y });
       }
     }
-    return list.slice(0, 12);
+    return list.slice(0, 16);
   }, [searchQuery, stations, map.pois, map.provinces, map.cities, map.districts, difficulty, lang]);
 
   const toggleDrawer = (target: 'view' | 'search' | 'menu') => {
