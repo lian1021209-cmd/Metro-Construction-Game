@@ -9,6 +9,7 @@ import {
   LayerVisibility,
   RiverPath,
   RoadSegment,
+  SpawnConfig,
   Station,
   StationSize,
   STATION_CONFIGS,
@@ -40,6 +41,7 @@ import {
   buildWaterPolygonsGeoJson,
   fetchLocalOverpassStreets,
   GeoBounds,
+  getCellsPopulationChecksum,
   getEsriDarkGrayStyle,
   getEsriLightGrayStyle,
   getPureCanvasGeoStyle,
@@ -62,6 +64,11 @@ if (typeof window !== 'undefined' && maplibreWorkerUrl) {
   maplibregl.setWorkerUrl(maplibreWorkerUrl);
 }
 
+const NATIONAL_CHINA_BOUNDS: [[number, number], [number, number]] = [
+  [75.5, 18.5],
+  [134.0, 53.0],
+];
+
 function getGeoFitBounds(geo: GeoBounds, map?: CityMap): [[number, number], [number, number]] {
   if (map && map.districts.length > 0) {
     let minLat = 90;
@@ -69,8 +76,14 @@ function getGeoFitBounds(geo: GeoBounds, map?: CityMap): [[number, number], [num
     let minLon = 180;
     let maxLon = -180;
     let hasPoly = false;
-    // Frame Shanghai municipal territory cleanly on startup & view reset
-    const shanghaiOrCore = map.districts.filter((d) => !d.provinceId || d.provinceId === 'prov_sh');
+    // Frame the player's actual starter / spawn districts first, then unlocked, then prov_sh
+    const starterDists = map.districts.filter((d) => d.isStarter);
+    const unlockedDists =
+      starterDists.length > 0 ? starterDists : map.districts.filter((d) => d.unlocked);
+    const shanghaiOrCore =
+      unlockedDists.length > 0
+        ? unlockedDists
+        : map.districts.filter((d) => !d.provinceId || d.provinceId === 'prov_sh');
     const targets = shanghaiOrCore.length > 0 ? shanghaiOrCore : map.districts;
     for (const d of targets) {
       const rings = d.polygons ?? (d.polygon ? [d.polygon] : []);
@@ -87,10 +100,16 @@ function getGeoFitBounds(geo: GeoBounds, map?: CityMap): [[number, number], [num
     }
     if (hasPoly) {
       return [
-        [minLon - 0.02, minLat - 0.02],
-        [maxLon + 0.02, maxLat + 0.02],
+        [minLon - 0.03, minLat - 0.03],
+        [maxLon + 0.03, maxLat + 0.03],
       ];
     }
+  }
+  if (map?.spawnConfig) {
+    return [
+      [map.spawnConfig.lon - 0.18, map.spawnConfig.lat - 0.14],
+      [map.spawnConfig.lon + 0.18, map.spawnConfig.lat + 0.14],
+    ];
   }
   return [
     [normXToLon(geo.minNx), normYToLat(geo.maxNy)],
@@ -102,6 +121,8 @@ export interface MetroCanvasHandle {
   zoomBy: (factor: number) => void;
   resetView: () => void;
   focusAt: (wx: number, wy: number, targetZoom?: number) => void;
+  flyToLatLon: (lat: number, lon: number, zoom?: number) => void;
+  fitNationalView: () => void;
 }
 
 interface MetroCanvasProps {
@@ -128,6 +149,9 @@ interface MetroCanvasProps {
   difficulty: DifficultyConfig;
   is25D: boolean;
   includeTaiwan?: boolean;
+  selectingSpawn?: boolean;
+  spawnPreview?: SpawnConfig | null;
+  onSelectSpawnPoint?: (wx: number, wy: number) => void;
   onPlaceStation: (x: number, y: number) => void;
   onInsertStationOnSegment: (segmentId: string, t: number, wx: number, wy: number) => void;
   onSelectStation: (id: string | null) => void;
@@ -508,6 +532,9 @@ function upsertGeoJsonSource(
   return true;
 }
 
+const uploadedHeatmapUrlByMap = new WeakMap<maplibregl.Map, string>();
+const pureLandDistCountByMap = new WeakMap<maplibregl.Map, number>();
+
 /**
  * Syncs WebGL GeoJSON layers for pure vector land/water fallback AND 3-tier progressive
  * administrative boundaries/masks directly inside MapLibre GL (zero zoom/pitch polygon tearing).
@@ -519,7 +546,13 @@ function syncMapLibreVectorLayers(
   isFallback: boolean,
   showPopHeatmap: boolean,
   popHeatmapDataUrl: string | null,
-  includeTaiwan: boolean
+  includeTaiwan: boolean,
+  spawnOptions?: {
+    selectingSpawn?: boolean;
+    selectedProvinceId?: string;
+    selectedCityId?: string;
+    selectedDistrictId?: string;
+  }
 ) {
   if (!cityMap.geoBounds || !mlMap.getStyle()) return;
 
@@ -527,13 +560,21 @@ function syncMapLibreVectorLayers(
   const useVectorBase = isFallback || styleId === 'canvas_vector';
 
   if (useVectorBase) {
-    const landData = buildPureLandGeoJson(cityMap);
-    if (landData.features.length > 0) {
-      upsertGeoJsonSource(mlMap, 'pure-land-geojson', landData, {
-        tolerance: 0,
-        buffer: 128,
-        maxzoom: 19,
-      });
+    const needsLandUpload =
+      !mlMap.getSource('pure-land-geojson') ||
+      pureLandDistCountByMap.get(mlMap) !== cityMap.districts.length;
+    if (needsLandUpload) {
+      const landData = buildPureLandGeoJson(cityMap);
+      if (landData.features.length > 0) {
+        upsertGeoJsonSource(mlMap, 'pure-land-geojson', landData, {
+          tolerance: 0,
+          buffer: 128,
+          maxzoom: 19,
+        });
+        pureLandDistCountByMap.set(mlMap, cityMap.districts.length);
+      }
+    }
+    if (mlMap.getSource('pure-land-geojson')) {
       if (!mlMap.getLayer('pure-land-fill')) {
         mlMap.addLayer({
           id: 'pure-land-fill',
@@ -583,13 +624,17 @@ function syncMapLibreVectorLayers(
       | maplibregl.ImageSource
       | undefined;
     if (existingImgSrc && typeof existingImgSrc.updateImage === 'function') {
-      existingImgSrc.updateImage({ url: popHeatmapDataUrl, coordinates: coords });
+      if (uploadedHeatmapUrlByMap.get(mlMap) !== popHeatmapDataUrl) {
+        existingImgSrc.updateImage({ url: popHeatmapDataUrl, coordinates: coords });
+        uploadedHeatmapUrlByMap.set(mlMap, popHeatmapDataUrl);
+      }
     } else if (!existingImgSrc) {
       mlMap.addSource('population-heatmap-source', {
         type: 'image',
         url: popHeatmapDataUrl,
         coordinates: coords,
       });
+      uploadedHeatmapUrlByMap.set(mlMap, popHeatmapDataUrl);
     }
 
     if (!mlMap.getLayer('population-heatmap-layer')) {
@@ -712,13 +757,17 @@ function syncMapLibreVectorLayers(
   }
 
   if (useVectorBase) {
-    const waterPolys = buildWaterPolygonsGeoJson(cityMap);
-    if (waterPolys.features.length > 0) {
-      upsertGeoJsonSource(mlMap, 'city-water-polygons-geojson', waterPolys, {
-        tolerance: 0,
-        buffer: 128,
-        maxzoom: 19,
-      });
+    if (!mlMap.getSource('city-water-polygons-geojson')) {
+      const waterPolys = buildWaterPolygonsGeoJson(cityMap);
+      if (waterPolys.features.length > 0) {
+        upsertGeoJsonSource(mlMap, 'city-water-polygons-geojson', waterPolys, {
+          tolerance: 0,
+          buffer: 128,
+          maxzoom: 19,
+        });
+      }
+    }
+    if (mlMap.getSource('city-water-polygons-geojson')) {
       if (!mlMap.getLayer('city-water-polygons-fill')) {
         mlMap.addLayer({
           id: 'city-water-polygons-fill',
@@ -744,13 +793,17 @@ function syncMapLibreVectorLayers(
       }
     }
 
-    const riversData = buildCityRiversGeoJson(cityMap);
-    if (riversData.features.length > 0) {
-      upsertGeoJsonSource(mlMap, 'city-rivers-geojson', riversData, {
-        tolerance: 0,
-        buffer: 128,
-        maxzoom: 19,
-      });
+    if (!mlMap.getSource('city-rivers-geojson')) {
+      const riversData = buildCityRiversGeoJson(cityMap);
+      if (riversData.features.length > 0) {
+        upsertGeoJsonSource(mlMap, 'city-rivers-geojson', riversData, {
+          tolerance: 0,
+          buffer: 128,
+          maxzoom: 19,
+        });
+      }
+    }
+    if (mlMap.getSource('city-rivers-geojson')) {
       if (!mlMap.getLayer('city-rivers-casing')) {
         mlMap.addLayer({
           id: 'city-rivers-casing',
@@ -780,7 +833,8 @@ function syncMapLibreVectorLayers(
   const regionsData = buildTieredRegionsGeoJson(
     cityMap,
     (city) => getCityUnlockPrereq(cityMap, city).canUnlock,
-    (dist) => getDistrictUnlockPrereq(cityMap, dist).canUnlock
+    (dist) => getDistrictUnlockPrereq(cityMap, dist).canUnlock,
+    spawnOptions
   );
 
   upsertGeoJsonSource(mlMap, 'city-regions-geojson', regionsData, {
@@ -798,6 +852,17 @@ function syncMapLibreVectorLayers(
       paint: {
         'fill-color': [
           'case',
+          ['==', ['get', 'selectingSpawn'], true],
+          [
+            'case',
+            ['all', ['==', ['get', 'tier'], 3], ['==', ['get', 'isSpawnSelected'], true]],
+            isDark ? 'rgba(16, 185, 129, 0.30)' : 'rgba(16, 185, 129, 0.22)',
+            ['all', ['==', ['get', 'tier'], 2], ['==', ['get', 'isSpawnSelected'], true]],
+            isDark ? 'rgba(56, 189, 248, 0.16)' : 'rgba(37, 99, 235, 0.12)',
+            ['all', ['==', ['get', 'tier'], 1], ['==', ['get', 'isSpawnSelected'], true]],
+            isDark ? 'rgba(56, 189, 248, 0.08)' : 'rgba(37, 99, 235, 0.06)',
+            'rgba(0, 0, 0, 0)',
+          ],
           ['==', ['get', 'tier'], 1],
           [
             'case',
@@ -821,7 +886,14 @@ function syncMapLibreVectorLayers(
             isDark ? 'rgba(4, 7, 13, 0.56)' : 'rgba(15, 23, 42, 0.20)',
           ],
         ],
-        'fill-opacity': ['case', ['==', ['get', 'unlocked'], true], 0, 1],
+        'fill-opacity': [
+          'case',
+          ['==', ['get', 'selectingSpawn'], true],
+          1,
+          ['==', ['get', 'unlocked'], true],
+          0,
+          1,
+        ],
       },
     });
   }
@@ -836,11 +908,25 @@ function syncMapLibreVectorLayers(
       paint: {
         'line-color': [
           'case',
+          ['==', ['get', 'selectingSpawn'], true],
+          [
+            'case',
+            ['==', ['get', 'isSpawnSelected'], true],
+            '#059669',
+            ['==', ['get', 'tier'], 1],
+            isDark ? 'rgba(148, 163, 184, 0.44)' : 'rgba(15, 23, 42, 0.34)',
+            isDark ? 'rgba(56, 189, 248, 0.38)' : 'rgba(37, 99, 235, 0.32)',
+          ],
           ['==', ['get', 'isStarter'], true],
           isDark ? 'rgba(148, 163, 184, 0.34)' : 'rgba(15, 23, 42, 0.30)',
           isDark ? 'rgba(56, 189, 248, 0.52)' : 'rgba(37, 99, 235, 0.54)',
         ],
-        'line-width': ['interpolate', ['linear'], ['zoom'], 6, 1.0, 10, 1.35, 14, 1.75],
+        'line-width': [
+          'case',
+          ['all', ['==', ['get', 'selectingSpawn'], true], ['==', ['get', 'isSpawnSelected'], true]],
+          2.4,
+          ['interpolate', ['linear'], ['zoom'], 4, 1.1, 8, 1.45, 14, 1.85],
+        ],
       },
     });
   }
@@ -929,6 +1015,9 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       difficulty,
       is25D,
       includeTaiwan = false,
+      selectingSpawn = false,
+      spawnPreview = null,
+      onSelectSpawnPoint,
       onPlaceStation,
       onInsertStationOnSegment,
       onSelectStation,
@@ -999,6 +1088,8 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       difficulty,
       is25D,
       includeTaiwan,
+      selectingSpawn,
+      spawnPreview,
     });
 
     uiRef.current = {
@@ -1015,6 +1106,8 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       difficulty,
       is25D,
       includeTaiwan,
+      selectingSpawn,
+      spawnPreview,
     };
 
     const hasGeo = Boolean(simDataRef.current.map.geoBounds);
@@ -1059,7 +1152,8 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
 
       const ensurePopHeatmap = () => {
         const resTag = isWorldPopHiResReady() ? 'hi' : 'sync';
-        const key = `${mapSeedKey}_${mapVersionRef.current}_${resTag}`;
+        const cellsSig = getCellsPopulationChecksum(simDataRef.current.map.cells);
+        const key = `${mapSeedKey}_${resTag}_${cellsSig}`;
         if (popHeatmapRef.current && popHeatmapRef.current.key === key) {
           return popHeatmapRef.current;
         }
@@ -1074,6 +1168,16 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
         return entry;
       };
 
+      const getSpawnOpts = () =>
+        uiRef.current.selectingSpawn
+          ? {
+              selectingSpawn: true,
+              selectedProvinceId: uiRef.current.spawnPreview?.provinceId,
+              selectedCityId: uiRef.current.spawnPreview?.cityId,
+              selectedDistrictId: uiRef.current.spawnPreview?.districtId,
+            }
+          : undefined;
+
       mlMap.on('load', () => {
         mlMap.resize();
         const hm = ensurePopHeatmap();
@@ -1084,12 +1188,15 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
           pureVectorFallbackRef.current,
           uiRef.current.layers.populationHeatmap,
           hm?.dataUrl ?? null,
-          Boolean(uiRef.current.includeTaiwan)
+          Boolean(uiRef.current.includeTaiwan),
+          getSpawnOpts()
         );
       });
 
       mlMap.on('style.load', () => {
         prevHoveredRegionRef.current = null;
+        uploadedHeatmapUrlByMap.delete(mlMap);
+        pureLandDistCountByMap.delete(mlMap);
         const hm = ensurePopHeatmap();
         syncMapLibreVectorLayers(
           mlMap,
@@ -1098,7 +1205,8 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
           pureVectorFallbackRef.current,
           uiRef.current.layers.populationHeatmap,
           hm?.dataUrl ?? null,
-          Boolean(uiRef.current.includeTaiwan)
+          Boolean(uiRef.current.includeTaiwan),
+          getSpawnOpts()
         );
       });
 
@@ -1146,7 +1254,8 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       let cancelled = false;
       preloadWorldPopHiRes(() => {
         if (cancelled) return;
-        const key = `${mapSeedKey}_${mapVersionRef.current}_hi`;
+        const cellsSig = getCellsPopulationChecksum(simDataRef.current.map.cells);
+        const key = `${mapSeedKey}_hi_${cellsSig}`;
         if (popHeatmapRef.current?.key === key) return;
         const hmCanvas = buildPopulationHeatmapCanvas(simDataRef.current.map);
         if (!hmCanvas) return;
@@ -1162,7 +1271,15 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               pureVectorFallbackRef.current,
               uiRef.current.layers.populationHeatmap,
               dataUrl,
-              Boolean(uiRef.current.includeTaiwan)
+              Boolean(uiRef.current.includeTaiwan),
+              uiRef.current.selectingSpawn
+                ? {
+                    selectingSpawn: true,
+                    selectedProvinceId: uiRef.current.spawnPreview?.provinceId,
+                    selectedCityId: uiRef.current.spawnPreview?.cityId,
+                    selectedDistrictId: uiRef.current.spawnPreview?.districtId,
+                  }
+                : undefined
             );
           } catch {
             // style not loaded yet; style.load will pick up popHeatmapRef
@@ -1177,7 +1294,8 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
     // Sync MapLibre 3-tier administrative GeoJSON polygons & smoothed population heatmap whenever map updates
     useEffect(() => {
       const resTag = isWorldPopHiResReady() ? 'hi' : 'sync';
-      const key = `${mapSeedKey}_${mapVersion}_${resTag}`;
+      const cellsSig = getCellsPopulationChecksum(simDataRef.current.map.cells);
+      const key = `${mapSeedKey}_${resTag}_${cellsSig}`;
       if (!popHeatmapRef.current || popHeatmapRef.current.key !== key) {
         const hmCanvas = buildPopulationHeatmapCanvas(simDataRef.current.map);
         if (hmCanvas) {
@@ -1193,6 +1311,14 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       if (!mlMap || !simDataRef.current.map.geoBounds) return;
       prevHoveredRegionRef.current = null;
       const dataUrl = popHeatmapRef.current?.dataUrl ?? null;
+      const spawnOpts = selectingSpawn
+        ? {
+            selectingSpawn: true,
+            selectedProvinceId: spawnPreview?.provinceId,
+            selectedCityId: spawnPreview?.cityId,
+            selectedDistrictId: spawnPreview?.districtId,
+          }
+        : undefined;
       if (mlMap.getSource('city-regions-geojson')) {
         try {
           syncMapLibreVectorLayers(
@@ -1202,7 +1328,8 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
             pureVectorFallbackRef.current,
             uiRef.current.layers.populationHeatmap,
             dataUrl,
-            Boolean(includeTaiwan)
+            Boolean(includeTaiwan),
+            spawnOpts
           );
           return;
         } catch {
@@ -1217,14 +1344,23 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
           pureVectorFallbackRef.current,
           uiRef.current.layers.populationHeatmap,
           popHeatmapRef.current?.dataUrl ?? null,
-          Boolean(includeTaiwan)
+          Boolean(includeTaiwan),
+          spawnOpts
         );
       };
       mlMap.once('style.load', onStyleReady);
       return () => {
         mlMap.off('style.load', onStyleReady);
       };
-    }, [mapSeedKey, mapVersion, includeTaiwan]);
+    }, [
+      mapSeedKey,
+      mapVersion,
+      includeTaiwan,
+      selectingSpawn,
+      spawnPreview?.provinceId,
+      spawnPreview?.cityId,
+      spawnPreview?.districtId,
+    ]);
 
     // Toggle GPU population heatmap visibility immediately without rebuilding layers
     useEffect(() => {
@@ -1332,6 +1468,44 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
           y: rect.height / 2 - wy * z,
           zoom: z,
         };
+      },
+      flyToLatLon: (lat: number, lon: number, zoom = 9.2) => {
+        const geo = simDataRef.current.map.geoBounds;
+        const mlMap = mlMapRef.current;
+        if (mlMap && geo) {
+          mlMap.easeTo({
+            center: [lon, lat],
+            zoom: Math.min(19.5, Math.max(3.4, zoom)),
+            pitch: 0,
+            bearing: 0,
+            duration: 560,
+          });
+          return;
+        }
+        if (geo) {
+          const pt = latLonToWorld(lat, lon, geo, mapWidth, mapHeight);
+          const el = containerRef.current;
+          if (!el) return;
+          const rect = el.getBoundingClientRect();
+          const z = 0.65;
+          cameraRef.current = {
+            x: rect.width / 2 - pt.x * z,
+            y: rect.height / 2 - pt.y * z,
+            zoom: z,
+          };
+        }
+      },
+      fitNationalView: () => {
+        const mlMap = mlMapRef.current;
+        if (mlMap && simDataRef.current.map.geoBounds) {
+          mlMap.resize();
+          mlMap.fitBounds(NATIONAL_CHINA_BOUNDS, {
+            padding: { top: 88, bottom: 132, left: 36, right: 36 },
+            pitch: 0,
+            bearing: 0,
+            duration: 580,
+          });
+        }
       },
     }));
 
@@ -1865,11 +2039,10 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                 ctx.restore();
               }
 
-              // Tier 3: Shanghai & Districts inside Unlocked Cities
+              // Tier 3: Districts inside Unlocked Provinces & Cities
               for (const d of st.map.districts) {
-                const isShanghaiDist = !d.provinceId || d.provinceId === 'prov_sh';
-                const provUnlocked = isShanghaiDist || Boolean(provUnlockedMap.get(d.provinceId!));
-                const cityUnlocked = isShanghaiDist || !d.cityId || Boolean(cityUnlockedMap.get(d.cityId));
+                const provUnlocked = d.provinceId ? Boolean(provUnlockedMap.get(d.provinceId)) : true;
+                const cityUnlocked = d.cityId ? Boolean(cityUnlockedMap.get(d.cityId)) : true;
                 if (!provUnlocked || !cityUnlocked) continue;
 
                 const rings = d.polygons ?? (d.polygon ? [d.polygon] : []);
@@ -1959,116 +2132,214 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               ctx.fillText(label, px, py);
             };
 
-            // 5B. Unlocked District Labels & Progressive District Unlock Badges (only inside unlocked cities)
-            for (const d of st.map.districts) {
-              const isShanghaiDist = !d.provinceId || d.provinceId === 'prov_sh';
-              const provUnlocked = isShanghaiDist || Boolean(provUnlockedMap.get(d.provinceId!));
-              const cityUnlocked = isShanghaiDist || !d.cityId || Boolean(cityUnlockedMap.get(d.cityId));
-              if (!provUnlocked || !cityUnlocked) continue;
-
-              const p = proj(d.x, d.y);
-              if (!isSaneScreenPt(p) || p.x < -260 || p.x > w + 260 || p.y < -260 || p.y > h + 260) continue;
-              ctx.save();
-
-              if (d.unlocked) {
-                const fontSize = zoomRatio < 0.55 ? 10.5 : 12.5;
-                ctx.font = `600 ${fontSize}px "Noto Sans TC", "Manrope", sans-serif`;
+            if (st.selectingSpawn) {
+              // Interactive On-Map Spawn Selection Mode: clean labels & pulsing spawn beacon without lock fog
+              const selProvId = st.spawnPreview?.provinceId;
+              const selCityId = st.spawnPreview?.cityId;
+              for (const prov of st.map.provinces ?? []) {
+                const p = proj(prov.x, prov.y);
+                if (!isSaneScreenPt(p) || p.x < -120 || p.x > w + 120 || p.y < -120 || p.y > h + 120) continue;
+                const isSel = prov.id === selProvId;
+                ctx.save();
+                ctx.font = `${isSel ? '700' : '600'} ${isSel ? 13 : 11.5}px "Noto Sans TC", sans-serif`;
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
                 ctx.lineWidth = 3.2;
-                ctx.strokeStyle = isDarkMap ? 'rgba(6, 11, 20, 0.85)' : 'rgba(255, 255, 255, 0.94)';
-                ctx.strokeText(d.name, p.x, p.y);
-                ctx.fillStyle = isDarkMap
-                  ? d.isStarter ? 'rgba(226, 232, 240, 0.88)' : 'rgba(186, 230, 253, 0.86)'
-                  : d.isStarter ? '#0F172A' : '#1E40AF';
-                ctx.fillText(d.name, p.x, p.y);
+                ctx.strokeStyle = isDarkMap ? 'rgba(6, 11, 20, 0.9)' : 'rgba(255, 255, 255, 0.96)';
+                ctx.strokeText(prov.name, p.x, p.y);
+                ctx.fillStyle = isSel
+                  ? '#059669'
+                  : isDarkMap ? 'rgba(226, 232, 240, 0.9)' : '#0F172A';
+                ctx.fillText(prov.name, p.x, p.y);
+                ctx.restore();
+              }
 
-                if (d.isStarter && zoomRatio >= 0.65) {
-                  ctx.font = '600 9.5px "Noto Sans TC", sans-serif';
-                  ctx.strokeStyle = isDarkMap ? 'rgba(6, 11, 20, 0.85)' : 'rgba(255, 255, 255, 0.94)';
+              if (selProvId && zoomRatio >= 0.06) {
+                for (const c of st.map.cities ?? []) {
+                  if (c.provinceId !== selProvId) continue;
+                  const p = proj(c.x, c.y);
+                  if (!isSaneScreenPt(p) || p.x < -120 || p.x > w + 120 || p.y < -120 || p.y > h + 120) continue;
+                  const isSel = c.id === selCityId;
+                  ctx.save();
+                  ctx.font = `${isSel ? '700' : '600'} ${isSel ? 12.5 : 11}px "Noto Sans TC", sans-serif`;
+                  ctx.textAlign = 'center';
+                  ctx.textBaseline = 'middle';
+                  ctx.lineWidth = 3;
+                  ctx.strokeStyle = isDarkMap ? 'rgba(6, 11, 20, 0.9)' : 'rgba(255, 255, 255, 0.95)';
+                  ctx.strokeText(c.name, p.x, p.y);
+                  ctx.fillStyle = isSel ? '#059669' : isDarkMap ? '#BAE6FD' : '#1D4ED8';
+                  ctx.fillText(c.name, p.x, p.y);
+                  ctx.restore();
+                }
+              }
+
+              if (selCityId && zoomRatio >= 0.25) {
+                for (const d of st.map.districts) {
+                  if (d.cityId !== selCityId) continue;
+                  const p = proj(d.x, d.y);
+                  if (!isSaneScreenPt(p) || p.x < -120 || p.x > w + 120 || p.y < -120 || p.y > h + 120) continue;
+                  const isSel = d.id === st.spawnPreview?.districtId;
+                  ctx.save();
+                  ctx.font = `${isSel ? '700' : '500'} ${isSel ? 12 : 10.5}px "Noto Sans TC", sans-serif`;
+                  ctx.textAlign = 'center';
+                  ctx.textBaseline = 'middle';
                   ctx.lineWidth = 2.8;
-                  ctx.strokeText('開局出生點', p.x, p.y + 13);
-                  ctx.fillStyle = isDarkMap ? 'rgba(110, 231, 183, 0.82)' : '#047857';
-                  ctx.fillText('開局出生點', p.x, p.y + 13);
-                } else if (d.cityName && d.cityId !== 'city_sh' && zoomRatio >= 0.45) {
-                  const subTag = `${d.provinceName ?? ''} · ${d.cityName}`;
-                  ctx.font = '500 9.5px "Noto Sans TC", sans-serif';
+                  ctx.strokeStyle = isDarkMap ? 'rgba(6, 11, 20, 0.88)' : 'rgba(255, 255, 255, 0.94)';
+                  ctx.strokeText(d.name, p.x, p.y);
+                  ctx.fillStyle = isSel ? '#047857' : isDarkMap ? '#E2E8F0' : '#334155';
+                  ctx.fillText(d.name, p.x, p.y);
+                  ctx.restore();
+                }
+              }
+
+              if (st.spawnPreview) {
+                const sp = proj(st.spawnPreview.wx, st.spawnPreview.wy);
+                if (isSaneScreenPt(sp)) {
+                  const pulse = (Math.sin(performance.now() * 0.006) + 1) * 0.5;
+                  ctx.save();
+                  ctx.beginPath();
+                  ctx.arc(sp.x, sp.y, 16 + pulse * 14, 0, Math.PI * 2);
+                  ctx.fillStyle = `rgba(16, 185, 129, ${(0.28 - pulse * 0.18).toFixed(2)})`;
+                  ctx.fill();
+
+                  ctx.beginPath();
+                  ctx.arc(sp.x, sp.y, 10, 0, Math.PI * 2);
+                  ctx.fillStyle = '#059669';
+                  ctx.fill();
+                  ctx.lineWidth = 3;
+                  ctx.strokeStyle = '#FFFFFF';
+                  ctx.stroke();
+
+                  const badgeText = `出生點 · ${st.spawnPreview.cityName}${
+                    st.spawnPreview.districtName ? `（${st.spawnPreview.districtName}）` : ''
+                  }`;
+                  ctx.font = '700 12px "Noto Sans TC", sans-serif';
+                  const tw = ctx.measureText(badgeText).width + 20;
+                  const bx = sp.x - tw / 2;
+                  const by = sp.y - 40;
+                  ctx.fillStyle = 'rgba(15, 23, 42, 0.92)';
+                  ctx.beginPath();
+                  ctx.roundRect(bx, by, tw, 24, 6);
+                  ctx.fill();
+                  ctx.fillStyle = '#FFFFFF';
+                  ctx.textAlign = 'center';
+                  ctx.textBaseline = 'middle';
+                  ctx.fillText(badgeText, sp.x, by + 12);
+                  ctx.restore();
+                }
+              }
+              lockedDistrictHitboxesRef.current = [];
+            } else {
+              // 5B. Unlocked District Labels & Progressive District Unlock Badges (only inside unlocked cities)
+              for (const d of st.map.districts) {
+                const provUnlocked = d.provinceId ? Boolean(provUnlockedMap.get(d.provinceId)) : true;
+                const cityUnlocked = d.cityId ? Boolean(cityUnlockedMap.get(d.cityId)) : true;
+                if (!provUnlocked || !cityUnlocked) continue;
+
+                const p = proj(d.x, d.y);
+                if (!isSaneScreenPt(p) || p.x < -260 || p.x > w + 260 || p.y < -260 || p.y > h + 260) continue;
+                ctx.save();
+
+                if (d.unlocked) {
+                  const fontSize = zoomRatio < 0.55 ? 10.5 : 12.5;
+                  ctx.font = `600 ${fontSize}px "Noto Sans TC", "Manrope", sans-serif`;
+                  ctx.textAlign = 'center';
+                  ctx.textBaseline = 'middle';
+                  ctx.lineWidth = 3.2;
                   ctx.strokeStyle = isDarkMap ? 'rgba(6, 11, 20, 0.85)' : 'rgba(255, 255, 255, 0.94)';
-                  ctx.lineWidth = 2.6;
-                  ctx.strokeText(subTag, p.x, p.y + 13);
-                  ctx.fillStyle = isDarkMap ? 'rgba(148, 163, 184, 0.85)' : '#475569';
-                  ctx.fillText(subTag, p.x, p.y + 13);
+                  ctx.strokeText(d.name, p.x, p.y);
+                  ctx.fillStyle = isDarkMap
+                    ? d.isStarter ? 'rgba(226, 232, 240, 0.88)' : 'rgba(186, 230, 253, 0.86)'
+                    : d.isStarter ? '#0F172A' : '#1E40AF';
+                  ctx.fillText(d.name, p.x, p.y);
+
+                  if (d.isStarter && zoomRatio >= 0.65) {
+                    ctx.font = '600 9.5px "Noto Sans TC", sans-serif';
+                    ctx.strokeStyle = isDarkMap ? 'rgba(6, 11, 20, 0.85)' : 'rgba(255, 255, 255, 0.94)';
+                    ctx.lineWidth = 2.8;
+                    ctx.strokeText('開局出生點', p.x, p.y + 13);
+                    ctx.fillStyle = isDarkMap ? 'rgba(110, 231, 183, 0.82)' : '#047857';
+                    ctx.fillText('開局出生點', p.x, p.y + 13);
+                  } else if (d.cityName && d.cityId !== 'city_sh' && zoomRatio >= 0.45) {
+                    const subTag = `${d.provinceName ?? ''} · ${d.cityName}`;
+                    ctx.font = '500 9.5px "Noto Sans TC", sans-serif';
+                    ctx.strokeStyle = isDarkMap ? 'rgba(6, 11, 20, 0.85)' : 'rgba(255, 255, 255, 0.94)';
+                    ctx.lineWidth = 2.6;
+                    ctx.strokeText(subTag, p.x, p.y + 13);
+                    ctx.fillStyle = isDarkMap ? 'rgba(148, 163, 184, 0.85)' : '#475569';
+                    ctx.fillText(subTag, p.x, p.y + 13);
+                  }
+                } else {
+                  const prereq = getDistrictUnlockPrereq(st.map, d);
+                  const unlockCost = getDistrictUnlockCost(d, ui.difficulty);
+                  if (prereq.canUnlock) {
+                    const label =
+                      zoomRatio < 0.52
+                        ? `🔒 ${d.name} · ${formatCurrencyWan(unlockCost, ui.lang)}`
+                        : `🔒 ${d.name} · ${formatCurrencyWan(unlockCost, ui.lang)} 解鎖`;
+                    drawLockBadge('district', d.id, p.x, p.y, label, { ready: true });
+                  } else if (zoomRatio >= 0.44) {
+                    const label = `🔒 ${d.name}（需先解鎖${prereq.blockedByName ?? ''}）`;
+                    drawLockBadge('district', d.id, p.x, p.y, label, { ready: false });
+                  }
                 }
-              } else {
-                const prereq = getDistrictUnlockPrereq(st.map, d);
-                const unlockCost = getDistrictUnlockCost(d, ui.difficulty);
+                ctx.restore();
+              }
+
+              // 5C. Locked City Gateway Badges (inside Unlocked Provinces)
+              for (const c of st.map.cities ?? []) {
+                if (c.unlocked) continue;
+                if (!provUnlockedMap.get(c.provinceId)) continue;
+                const p = proj(c.x, c.y);
+                if (!isSaneScreenPt(p) || p.x < -260 || p.x > w + 260 || p.y < -260 || p.y > h + 260) continue;
+
+                ctx.save();
+                const prereq = getCityUnlockPrereq(st.map, c);
+                const unlockCost = getCityUnlockCost(c, ui.difficulty);
+                const closestDist = st.map.districts.find((d) => d.id === c.closestDistrictId);
                 if (prereq.canUnlock) {
-                  const label =
-                    zoomRatio < 0.52
-                      ? `🔒 ${d.name} · ${formatCurrencyWan(unlockCost, ui.lang)}`
-                      : `🔒 ${d.name} · ${formatCurrencyWan(unlockCost, ui.lang)} 解鎖`;
-                  drawLockBadge('district', d.id, p.x, p.y, label, { ready: true });
-                } else if (zoomRatio >= 0.44) {
-                  const label = `🔒 ${d.name}（需先解鎖${prereq.blockedByName ?? ''}）`;
-                  drawLockBadge('district', d.id, p.x, p.y, label, { ready: false });
+                  const label = closestDist
+                    ? `🔒 ${c.name}（含${closestDist.name}）· ${formatCurrencyWan(unlockCost, ui.lang)}`
+                    : `🔒 ${c.name} · ${formatCurrencyWan(unlockCost, ui.lang)} 解鎖`;
+                  drawLockBadge('city', c.id, p.x, p.y, label, { ready: true, prominent: true });
+                } else if (zoomRatio >= 0.14) {
+                  const label = `🔒 ${c.name}（需先解鎖${prereq.blockedByName ?? ''}）`;
+                  drawLockBadge('city', c.id, p.x, p.y, label, { ready: false });
                 }
+                ctx.restore();
               }
-              ctx.restore();
-            }
 
-            // 5C. Locked City Gateway Badges (inside Unlocked Provinces)
-            for (const c of st.map.cities ?? []) {
-              if (c.unlocked) continue;
-              if (!provUnlockedMap.get(c.provinceId)) continue;
-              const p = proj(c.x, c.y);
-              if (!isSaneScreenPt(p) || p.x < -260 || p.x > w + 260 || p.y < -260 || p.y > h + 260) continue;
+              // 5D. Locked Province Gateway Badges
+              for (const prov of st.map.provinces ?? []) {
+                if (prov.unlocked) continue;
+                const p = proj(prov.x, prov.y);
+                if (!isSaneScreenPt(p) || p.x < -280 || p.x > w + 280 || p.y < -280 || p.y > h + 280) continue;
 
-              ctx.save();
-              const prereq = getCityUnlockPrereq(st.map, c);
-              const unlockCost = getCityUnlockCost(c, ui.difficulty);
-              const closestDist = st.map.districts.find((d) => d.id === c.closestDistrictId);
-              if (prereq.canUnlock) {
-                const label = closestDist
-                  ? `🔒 ${c.name}（含${closestDist.name}）· ${formatCurrencyWan(unlockCost, ui.lang)}`
-                  : `🔒 ${c.name} · ${formatCurrencyWan(unlockCost, ui.lang)} 解鎖`;
-                drawLockBadge('city', c.id, p.x, p.y, label, { ready: true, prominent: true });
-              } else if (zoomRatio >= 0.14) {
-                const label = `🔒 ${c.name}（需先解鎖${prereq.blockedByName ?? ''}）`;
-                drawLockBadge('city', c.id, p.x, p.y, label, { ready: false });
+                ctx.save();
+                const unlockCost = getProvinceUnlockCost(prov, ui.difficulty);
+                const closestCity = st.map.cities?.find((c) => c.id === prov.closestCityId);
+                const closestDist = closestCity
+                  ? st.map.districts.find((d) => d.id === closestCity.closestDistrictId)
+                  : undefined;
+                const cName = closestCity?.name ?? prov.closestCityName;
+                const dName = closestDist?.name ?? prov.closestDistrictName;
+                const chainHint =
+                  cName && dName && zoomRatio >= 0.08
+                    ? `（解鎖含${cName}→${dName}）`
+                    : '';
+                const label =
+                  zoomRatio < 0.04
+                    ? `🔒 ${prov.name}`
+                    : `🔒 ${prov.name}${chainHint} · ${formatCurrencyWan(unlockCost, ui.lang)}`;
+                drawLockBadge('province', prov.id, p.x, p.y, label, {
+                  ready: true,
+                  prominent: zoomRatio >= 0.08,
+                });
+                ctx.restore();
               }
-              ctx.restore();
+
+              lockedDistrictHitboxesRef.current = nextLockedHitboxes;
             }
-
-            // 5D. Locked Province Gateway Badges
-            for (const prov of st.map.provinces ?? []) {
-              if (prov.unlocked) continue;
-              const p = proj(prov.x, prov.y);
-              if (!isSaneScreenPt(p) || p.x < -280 || p.x > w + 280 || p.y < -280 || p.y > h + 280) continue;
-
-              ctx.save();
-              const unlockCost = getProvinceUnlockCost(prov, ui.difficulty);
-              const closestCity = st.map.cities?.find((c) => c.id === prov.closestCityId);
-              const closestDist = closestCity
-                ? st.map.districts.find((d) => d.id === closestCity.closestDistrictId)
-                : undefined;
-              const cName = closestCity?.name ?? prov.closestCityName;
-              const dName = closestDist?.name ?? prov.closestDistrictName;
-              const chainHint =
-                cName && dName && zoomRatio >= 0.08
-                  ? `（解鎖含${cName}→${dName}）`
-                  : '';
-              const label =
-                zoomRatio < 0.04
-                  ? `🔒 ${prov.name}`
-                  : `🔒 ${prov.name}${chainHint} · ${formatCurrencyWan(unlockCost, ui.lang)}`;
-              drawLockBadge('province', prov.id, p.x, p.y, label, {
-                ready: true,
-                prominent: zoomRatio >= 0.08,
-              });
-              ctx.restore();
-            }
-
-            lockedDistrictHitboxesRef.current = nextLockedHitboxes;
 
             // 5.5 Real City POIs & Landmarks (◆ markers)
             if (st.map.pois && st.map.pois.length > 0 && zoomRatio > 0.5) {
@@ -2764,6 +3035,20 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
 
       if (e.button !== 0) return;
 
+      if (selectingSpawn) {
+        isPanningRef.current = true;
+        panStartRef.current = {
+          x: e.clientX,
+          y: e.clientY,
+          lastX: e.clientX,
+          lastY: e.clientY,
+          camX: cameraRef.current.x,
+          camY: cameraRef.current.y,
+          moved: false,
+        };
+        return;
+      }
+
       let hitLockedBadge:
         | { kind: 'province' | 'city' | 'district'; id: string; x1: number; y1: number; x2: number; y2: number }
         | undefined;
@@ -2972,8 +3257,11 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       }
     };
 
-    const handlePointerUp = () => {
-      if (isPanningRef.current && !panStartRef.current.moved && tool === 'select') {
+    const handlePointerUp = (e?: React.PointerEvent<HTMLCanvasElement>) => {
+      if (selectingSpawn && isPanningRef.current && !panStartRef.current.moved && e && e.button === 0) {
+        const { wx, wy } = screenToWorld(e.clientX, e.clientY);
+        onSelectSpawnPoint?.(wx, wy);
+      } else if (isPanningRef.current && !panStartRef.current.moved && tool === 'select') {
         onSelectStation(null);
       }
       isPanningRef.current = false;
@@ -3070,7 +3358,9 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               height: '100%',
             }}
             className={`z-10 block ${
-              isHoveringDistrict
+              selectingSpawn
+                ? 'cursor-pointer active:cursor-grabbing'
+                : isHoveringDistrict
                 ? 'cursor-pointer'
                 : tool === 'station' || tool === 'track' || tool === 'demolish'
                 ? 'cursor-crosshair'

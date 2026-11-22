@@ -51,7 +51,10 @@ export function getCityUnlockPrereq(
   if (prov && !prov.unlocked) {
     return { canUnlock: false, blockedByName: prov.name, blockedKind: 'province' };
   }
-  if (city.isClosestToShanghai) {
+  const provHasUnlockedCity = Boolean(
+    map.cities?.some((c) => c.provinceId === city.provinceId && c.unlocked)
+  );
+  if (!provHasUnlockedCity && city.isClosestToShanghai) {
     return { canUnlock: true };
   }
   if (city.adjacentCityIds && city.adjacentCityIds.length > 0) {
@@ -60,11 +63,21 @@ export function getCityUnlockPrereq(
     );
     if (anyAdjUnlocked) return { canUnlock: true };
 
-    // Recommend the closest adjacent city to Shanghai as the intuitive prerequisite
     const adjCities = city.adjacentCityIds
       .map((adjId) => map.cities?.find((c) => c.id === adjId))
-      .filter((c): c is CityRegionInfo => Boolean(c))
-      .sort((a, b) => a.distanceKmFromShanghai - b.distanceKmFromShanghai);
+      .filter((c): c is CityRegionInfo => Boolean(c));
+    const unlockedCities = (map.cities ?? []).filter(
+      (c) => c.provinceId === city.provinceId && c.unlocked
+    );
+    if (unlockedCities.length > 0) {
+      adjCities.sort((a, b) => {
+        const da = Math.min(...unlockedCities.map((u) => Math.hypot(a.x - u.x, a.y - u.y)));
+        const db = Math.min(...unlockedCities.map((u) => Math.hypot(b.x - u.x, b.y - u.y)));
+        return da - db;
+      });
+    } else {
+      adjCities.sort((a, b) => a.distanceKmFromShanghai - b.distanceKmFromShanghai);
+    }
     const hintName = adjCities[0]?.name ?? prov?.name;
     return { canUnlock: false, blockedByName: hintName, blockedKind: 'city' };
   }
@@ -81,19 +94,22 @@ export function getDistrictUnlockPrereq(
   map: CityMap,
   district: DistrictInfo
 ): { canUnlock: boolean; blockedByName?: string; blockedKind?: 'province' | 'city' | 'district' } {
-  if (district.provinceId && district.provinceId !== 'prov_sh') {
+  if (district.provinceId) {
     const prov = map.provinces?.find((p) => p.id === district.provinceId);
     if (prov && !prov.unlocked) {
       return { canUnlock: false, blockedByName: prov.name, blockedKind: 'province' };
     }
   }
-  if (district.cityId && district.cityId !== 'city_sh') {
+  if (district.cityId) {
     const city = map.cities?.find((c) => c.id === district.cityId);
     if (city && !city.unlocked) {
       return { canUnlock: false, blockedByName: city.name, blockedKind: 'city' };
     }
   }
-  if (district.isCityClosestToShanghai) {
+  const cityHasUnlockedDist = district.cityId
+    ? map.districts.some((d) => d.cityId === district.cityId && d.unlocked)
+    : false;
+  if (!cityHasUnlockedDist && district.isCityClosestToShanghai) {
     return { canUnlock: true };
   }
   const prereqUnlocked = district.prereqDistrictId
@@ -108,16 +124,27 @@ export function getDistrictUnlockPrereq(
     if (anyAdjUnlocked) return { canUnlock: true };
   }
 
+  if (district.adjacentDistrictIds && district.adjacentDistrictIds.length > 0) {
+    const unlockedInCity = map.districts.filter((d) => d.cityId === district.cityId && d.unlocked);
+    const adjDists = district.adjacentDistrictIds
+      .map((adjId) => map.districts.find((d) => d.id === adjId))
+      .filter((d): d is DistrictInfo => Boolean(d))
+      .filter((d) => !d.unlocked);
+    if (adjDists.length > 0) {
+      if (unlockedInCity.length > 0) {
+        adjDists.sort((a, b) => {
+          const da = Math.min(...unlockedInCity.map((u) => Math.hypot(a.x - u.x, a.y - u.y)));
+          const db = Math.min(...unlockedInCity.map((u) => Math.hypot(b.x - u.x, b.y - u.y)));
+          return da - db;
+        });
+      }
+      return { canUnlock: false, blockedByName: adjDists[0].name, blockedKind: 'district' };
+    }
+  }
   if (district.prereqDistrictId) {
     const prereqDist = map.districts.find((d) => d.id === district.prereqDistrictId);
     if (prereqDist && !prereqDist.unlocked) {
       return { canUnlock: false, blockedByName: prereqDist.name, blockedKind: 'district' };
-    }
-  }
-  if (district.adjacentDistrictIds && district.adjacentDistrictIds.length > 0) {
-    const firstAdj = map.districts.find((d) => d.id === district.adjacentDistrictIds![0]);
-    if (firstAdj && !firstAdj.unlocked) {
-      return { canUnlock: false, blockedByName: firstAdj.name, blockedKind: 'district' };
     }
   }
   return { canUnlock: true };
@@ -259,6 +286,66 @@ export function findLockedDistrictAt(map: CityMap, wx: number, wy: number): Dist
     }
   }
   return null;
+}
+
+export function pointInPolygons(
+  rings: { x: number; y: number }[][] | undefined,
+  wx: number,
+  wy: number
+): boolean {
+  if (!rings || rings.length === 0) return false;
+  for (const ring of rings) {
+    if (ring.length >= 3 && pointInPolygon(wx, wy, ring)) return true;
+  }
+  return false;
+}
+
+export function findRegionAtWorld(
+  map: CityMap,
+  wx: number,
+  wy: number
+): {
+  province?: ProvinceRegionInfo;
+  city?: CityRegionInfo;
+  district?: DistrictInfo;
+} {
+  let district: DistrictInfo | undefined;
+  for (const d of map.districts) {
+    if (pointInDistrict(d, wx, wy)) {
+      district = d;
+      break;
+    }
+  }
+
+  let city: CityRegionInfo | undefined;
+  if (district?.cityId) {
+    city = map.cities?.find((c) => c.id === district!.cityId);
+  }
+  if (!city) {
+    for (const c of map.cities ?? []) {
+      if (pointInPolygons(c.polygons, wx, wy)) {
+        city = c;
+        break;
+      }
+    }
+  }
+
+  let province: ProvinceRegionInfo | undefined;
+  if (district?.provinceId) {
+    province = map.provinces?.find((p) => p.id === district!.provinceId);
+  } else if (city?.provinceId) {
+    province = map.provinces?.find((p) => p.id === city!.provinceId);
+  }
+  if (!province) {
+    for (const p of map.provinces ?? []) {
+      if (pointInPolygons(p.polygons, wx, wy)) {
+        province = p;
+        break;
+      }
+    }
+  }
+
+  return { province, city, district };
 }
 
 function distToPolylineWorld(px: number, py: number, pts: { x: number; y: number }[]): number {
@@ -893,8 +980,9 @@ export function stepSimulation(
             }
           }
         }
-      } else {
-        // National mode outside YRD cell grid: synthesize realistic local density from containing district & urban cores
+      }
+      if (!inYrdGrid || localPop + localJobs < 20) {
+        // National mode outside YRD populated grid: synthesize realistic local density from containing district & urban cores
         let hostDist: DistrictInfo | undefined;
         for (const d of map.districts) {
           if (pointInDistrict(d, st.x, st.y)) {

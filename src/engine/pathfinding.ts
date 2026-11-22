@@ -390,11 +390,11 @@ export function recomputeMapCoverage(map: CityMap, stations: Station[]): {
   for (let i = 0; i < map.cells.length; i++) {
     const cell = map.cells[i];
     const dIdx = districtIndices ? districtIndices[i] : -1;
-    if (dIdx >= 0) yrdDistrictSet.add(dIdx);
+    const w = cell.population + cell.jobs;
+    if (dIdx >= 0 && w > 0) yrdDistrictSet.add(dIdx);
     const isRegionUnlocked = dIdx === -1 ? true : Boolean(map.districts[dIdx]?.unlocked);
 
     if (isRegionUnlocked) {
-      const w = cell.population + cell.jobs;
       totalPop += cell.population;
       totalJobs += cell.jobs;
       totalWeight += w;
@@ -407,7 +407,7 @@ export function recomputeMapCoverage(map: CityMap, stations: Station[]): {
     }
   }
 
-  // National coverage integration: unlocked districts outside the YRD grid
+  // National coverage integration: unlocked districts outside the YRD populated grid
   let unlockedRealPop = 0;
   let hasRealPopData = false;
   let extTotalPop = 0;
@@ -422,8 +422,6 @@ export function recomputeMapCoverage(map: CityMap, stations: Station[]): {
       if (d.unlocked) unlockedRealPop += distPop;
     }
     if (!d.unlocked || yrdDistrictSet.has(dIdx)) continue;
-    const outsideYrd = d.x < 0 || d.x > map.width || d.y < 0 || d.y > map.height;
-    if (!outsideYrd) continue;
 
     const popW = Math.max(10000, distPop);
     extTotalPop += popW;

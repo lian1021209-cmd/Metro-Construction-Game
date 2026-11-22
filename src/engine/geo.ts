@@ -200,13 +200,26 @@ export function getPureCanvasGeoStyle(): StyleSpecification {
   };
 }
 
+const ringLonLatCache = new WeakMap<GeoBounds, WeakMap<object, number[][] | null>>();
+
 function closeWorldRingToLonLat(
   ring: { x: number; y: number }[],
   geo: GeoBounds,
   mapWidth: number,
   mapHeight: number
 ): number[][] | null {
-  if (ring.length < 3) return null;
+  let geoCache = ringLonLatCache.get(geo);
+  if (!geoCache) {
+    geoCache = new WeakMap();
+    ringLonLatCache.set(geo, geoCache);
+  }
+  if (geoCache.has(ring)) {
+    return geoCache.get(ring) ?? null;
+  }
+  if (ring.length < 3) {
+    geoCache.set(ring, null);
+    return null;
+  }
   const coords: number[][] = [];
   for (const pt of ring) {
     if (!Number.isFinite(pt.x) || !Number.isFinite(pt.y)) continue;
@@ -214,13 +227,18 @@ function closeWorldRingToLonLat(
     if (!Number.isFinite(ll.lon) || !Number.isFinite(ll.lat)) continue;
     coords.push([ll.lon, ll.lat]);
   }
-  if (coords.length < 3) return null;
+  if (coords.length < 3) {
+    geoCache.set(ring, null);
+    return null;
+  }
   const first = coords[0];
   const last = coords[coords.length - 1];
   if (first[0] !== last[0] || first[1] !== last[1]) {
     coords.push([first[0], first[1]]);
   }
-  return coords.length >= 4 ? coords : null;
+  const res = coords.length >= 4 ? coords : null;
+  geoCache.set(ring, res);
+  return res;
 }
 
 /**
@@ -261,10 +279,16 @@ export interface RiverGeoJsonCollection {
   }>;
 }
 
+const riversGeoJsonCache = new WeakMap<CityMap, RiverGeoJsonCollection>();
+const waterPolysGeoJsonCache = new WeakMap<CityMap, RiverGeoJsonCollection>();
+const pureLandGeoJsonCache = new WeakMap<CityMap, { distCount: number; data: GeoJsonMultiPolygonCollection }>();
+
 export function buildCityRiversGeoJson(map: CityMap): RiverGeoJsonCollection {
   if (!map.geoBounds) {
     return { type: 'FeatureCollection', features: [] };
   }
+  const cached = riversGeoJsonCache.get(map);
+  if (cached) return cached;
   const geo = map.geoBounds;
   const features = map.rivers
     .filter((rv) => !rv.skipPolylineWaterCheck)
@@ -283,7 +307,9 @@ export function buildCityRiversGeoJson(map: CityMap): RiverGeoJsonCollection {
     })
     .filter((f): f is NonNullable<typeof f> => f !== null);
 
-  return { type: 'FeatureCollection', features };
+  const res: RiverGeoJsonCollection = { type: 'FeatureCollection', features };
+  riversGeoJsonCache.set(map, res);
+  return res;
 }
 
 export interface GeoJsonMultiPolygonFeature {
@@ -304,6 +330,10 @@ export function buildPureLandGeoJson(map: CityMap): GeoJsonMultiPolygonCollectio
   if (!map.geoBounds) {
     return { type: 'FeatureCollection', features: [] };
   }
+  const cached = pureLandGeoJsonCache.get(map);
+  if (cached && cached.distCount === map.districts.length) {
+    return cached.data;
+  }
   const geo = map.geoBounds;
   const features: GeoJsonMultiPolygonFeature[] = [];
   for (const d of map.districts) {
@@ -323,13 +353,17 @@ export function buildPureLandGeoJson(map: CityMap): GeoJsonMultiPolygonCollectio
       },
     });
   }
-  return { type: 'FeatureCollection', features };
+  const data: GeoJsonMultiPolygonCollection = { type: 'FeatureCollection', features };
+  pureLandGeoJsonCache.set(map, { distCount: map.districts.length, data });
+  return data;
 }
 
 export function buildWaterPolygonsGeoJson(map: CityMap): RiverGeoJsonCollection {
   if (!map.geoBounds || !map.waterPolygons) {
     return { type: 'FeatureCollection', features: [] };
   }
+  const cached = waterPolysGeoJsonCache.get(map);
+  if (cached) return cached;
   const geo = map.geoBounds;
   const features: RiverGeoJsonCollection['features'] = [];
   for (const wp of map.waterPolygons) {
@@ -344,13 +378,21 @@ export function buildWaterPolygonsGeoJson(map: CityMap): RiverGeoJsonCollection 
       },
     });
   }
-  return { type: 'FeatureCollection', features };
+  const res: RiverGeoJsonCollection = { type: 'FeatureCollection', features };
+  waterPolysGeoJsonCache.set(map, res);
+  return res;
 }
 
 export function buildTieredRegionsGeoJson(
   map: CityMap,
   canUnlockCity: (city: NonNullable<CityMap['cities']>[number]) => boolean,
-  canUnlockDistrict: (district: CityMap['districts'][number]) => boolean
+  canUnlockDistrict: (district: CityMap['districts'][number]) => boolean,
+  spawnOptions?: {
+    selectingSpawn?: boolean;
+    selectedProvinceId?: string;
+    selectedCityId?: string;
+    selectedDistrictId?: string;
+  }
 ): GeoJsonMultiPolygonCollection {
   if (!map.geoBounds) {
     return { type: 'FeatureCollection', features: [] };
@@ -372,6 +414,72 @@ export function buildTieredRegionsGeoJson(
     }
     return out;
   };
+
+  if (spawnOptions?.selectingSpawn) {
+    for (const prov of map.provinces ?? []) {
+      const polyCoords = toMultiPolygonCoords(prov.polygons ?? []);
+      if (polyCoords.length === 0) continue;
+      const isSelected = prov.id === spawnOptions.selectedProvinceId;
+      features.push({
+        type: 'Feature',
+        properties: {
+          regionId: prov.id,
+          tier: 1,
+          unlocked: true,
+          isStarter: isSelected,
+          canUnlock: true,
+          selectingSpawn: true,
+          isSpawnSelected: isSelected,
+        },
+        geometry: { type: 'MultiPolygon', coordinates: polyCoords },
+      });
+    }
+
+    if (spawnOptions.selectedProvinceId) {
+      for (const city of map.cities ?? []) {
+        if (city.provinceId !== spawnOptions.selectedProvinceId) continue;
+        const polyCoords = toMultiPolygonCoords(city.polygons ?? []);
+        if (polyCoords.length === 0) continue;
+        const isSelected = city.id === spawnOptions.selectedCityId;
+        features.push({
+          type: 'Feature',
+          properties: {
+            regionId: city.id,
+            tier: 2,
+            unlocked: true,
+            isStarter: isSelected,
+            canUnlock: true,
+            selectingSpawn: true,
+            isSpawnSelected: isSelected,
+          },
+          geometry: { type: 'MultiPolygon', coordinates: polyCoords },
+        });
+      }
+
+      for (const d of map.districts) {
+        if (d.provinceId !== spawnOptions.selectedProvinceId) continue;
+        const rings = d.polygons ?? (d.polygon ? [d.polygon] : []);
+        const polyCoords = toMultiPolygonCoords(rings);
+        if (polyCoords.length === 0) continue;
+        const isSelected = d.id === spawnOptions.selectedDistrictId;
+        features.push({
+          type: 'Feature',
+          properties: {
+            regionId: d.id,
+            tier: 3,
+            unlocked: true,
+            isStarter: isSelected,
+            canUnlock: true,
+            selectingSpawn: true,
+            isSpawnSelected: isSelected,
+          },
+          geometry: { type: 'MultiPolygon', coordinates: polyCoords },
+        });
+      }
+    }
+
+    return { type: 'FeatureCollection', features };
+  }
 
   // Tier 1: Locked Provinces
   for (const prov of map.provinces ?? []) {
@@ -410,11 +518,10 @@ export function buildTieredRegionsGeoJson(
     });
   }
 
-  // Tier 3: Shanghai & Districts inside Unlocked Cities
+  // Tier 3: Districts inside Unlocked Provinces & Cities (uniformly checked including prov_sh)
   for (const d of map.districts) {
-    const isShanghaiDist = !d.provinceId || d.provinceId === 'prov_sh';
-    const provUnlocked = isShanghaiDist || Boolean(provUnlockedMap.get(d.provinceId!));
-    const cityUnlocked = isShanghaiDist || !d.cityId || Boolean(cityUnlockedMap.get(d.cityId));
+    const provUnlocked = d.provinceId ? Boolean(provUnlockedMap.get(d.provinceId)) : true;
+    const cityUnlocked = d.cityId ? Boolean(cityUnlockedMap.get(d.cityId)) : true;
     if (!provUnlocked || !cityUnlocked) continue;
     const rings = d.polygons ?? (d.polygon ? [d.polygon] : []);
     const polyCoords = toMultiPolygonCoords(rings);
@@ -1186,6 +1293,14 @@ function sampleBilinear(
   );
 }
 
+export function getCellsPopulationChecksum(cells: CityCell[]): number {
+  let sum = cells.length;
+  for (let i = 0; i < cells.length; i += 19) {
+    sum += cells[i].population + cells[i].jobs;
+  }
+  return Math.round(sum / 500);
+}
+
 /**
  * Generates an ultra-smooth, WorldPop 2020-grounded continuous density heatmap canvas:
  * White/Cream (#FFF8E0, 0) -> Yellow -> Orange -> Red -> Magenta -> Deep Purple (#4C1D95, 60k+/km²).
@@ -1223,7 +1338,9 @@ export function buildPopulationHeatmapCanvas(cityMap: CityMap): HTMLCanvasElemen
   const baseW = useHiRes ? WORLDPOP_HI_WIDTH : WORLDPOP_CELL_COLS;
   const baseH = useHiRes ? WORLDPOP_HI_HEIGHT : WORLDPOP_CELL_ROWS;
 
-  const upScale = 4;
+  // MapLibre already applies GPU bilinear resampling ('raster-resampling': 'linear'),
+  // so 2x upscaling (424x624) gives identical visual smoothness at 4x faster encode/upload speed.
+  const upScale = 2;
   const outW = cols * upScale;
   const outH = rows * upScale;
   const canvas = document.createElement('canvas');

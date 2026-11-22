@@ -1,11 +1,12 @@
 import React, { useEffect, useRef } from 'react';
-import { ArrowRight, Play, Volume2, VolumeX } from 'lucide-react';
+import { ArrowRight, MapPin, Play, Volume2, VolumeX } from 'lucide-react';
 
 interface TitleScreenProps {
   currentCityLabel: string;
   muted: boolean;
   onToggleMute: () => void;
   onStartNewGame: () => void;
+  onSelectSpawnOnMap?: () => void;
   onContinueGame: () => void;
   onQuickDemo: () => void;
   onOpenGdd: () => void;
@@ -26,6 +27,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
   muted,
   onToggleMute,
   onStartNewGame,
+  onSelectSpawnOnMap,
   onContinueGame,
   onQuickDemo,
   onOpenGdd,
@@ -362,7 +364,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
         <div className="space-y-8">
           <div className="space-y-4">
             <div className="flex items-center gap-2 text-xs text-slate-500">
-              <span>上海啟航 · 全國省市區分級實景邊界</span>
+              <span>全國自由選址 · 省市區三級實景邊界</span>
               <span aria-hidden="true">·</span>
               <span>無網格自由軌道工程模擬</span>
             </div>
@@ -372,25 +374,33 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
             </h1>
 
             <p className="text-sm md:text-[15px] text-slate-600 max-w-lg leading-relaxed">
-              從 1990 年人民廣場核心出發，跨越黃浦江與長三角劃設地下 B1–B5 與高架路網，逐步解鎖全國各省、直轄市、自治區及港澳都市圈與高鐵轉乘樞紐。
+              進入全國地圖自由點選任意省、自治區、直轄市或港澳都市圈作為出生點，劃設地下 B1–B5 與高架路網，從起點城市一步步跨區擴張至全國軌道樞紐網。
             </p>
           </div>
 
           {/* Primary + Quiet Secondary Action (Zero Button Stack Clutter) */}
           <div className="flex flex-wrap items-center gap-3">
             <button
+              onClick={onSelectSpawnOnMap ?? onStartNewGame}
+              className="px-5 py-2.5 rounded-lg bg-slate-950 hover:bg-slate-800 text-white text-sm font-semibold flex items-center gap-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              <MapPin className="w-4 h-4 text-emerald-400" />
+              <span>進入地圖自選出生點</span>
+            </button>
+
+            <button
               onClick={onStartNewGame}
-              className="px-5 py-2.5 rounded-lg bg-slate-950 hover:bg-slate-800 text-white text-sm font-semibold flex items-center gap-2.5 transition-colors whitespace-nowrap cursor-pointer"
+              className="px-4 py-2.5 rounded-lg bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 text-sm font-medium flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Play className="w-3.5 h-3.5 fill-current" />
-              <span>開始新規劃</span>
+              <span>城市清單開局</span>
             </button>
 
             <button
               onClick={onContinueGame}
-              className="px-5 py-2.5 rounded-lg bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 text-sm font-medium transition-colors whitespace-nowrap cursor-pointer"
+              className="px-4 py-2.5 rounded-lg bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-sm font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
-              進入目前都市 ({currentCityLabel})
+              繼續目前 ({currentCityLabel})
             </button>
           </div>
 
@@ -399,7 +409,7 @@ export const TitleScreen: React.FC<TitleScreenProps> = ({
             <div className="grid grid-cols-3 gap-6">
               <div>
                 <div className="text-lg font-bold font-mono-tabular text-slate-950">全國聯網</div>
-                <div className="text-xs text-slate-500 mt-0.5">省市區三級實景疆域</div>
+                <div className="text-xs text-slate-500 mt-0.5">任意省市區出生開局</div>
               </div>
               <div>
                 <div className="text-lg font-bold font-mono-tabular text-slate-950">EL / B1–B5</div>

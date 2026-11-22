@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Check, Compass, Crosshair, Globe2, MapPin, RotateCcw, Search, Shuffle } from 'lucide-react';
 import {
   ActiveLoan,
   BuildingModel,
   CityMap,
+  CityRegionInfo,
   computeMonthlyInstallmentWan,
   computeStationTodMonthlyRentWan,
   DEPTH_LEVELS,
@@ -18,8 +20,10 @@ import {
   LINE_SPEED_CONFIGS,
   LOAN_OFFERS,
   NetworkSnapshot,
+  ProvinceRegionInfo,
   RealCityId,
   SimulationStats,
+  SpawnConfig,
   Station,
   StationSize,
   STATION_CONFIGS,
@@ -30,7 +34,7 @@ import {
   TrackSegment,
   TransitLine,
 } from './types/game';
-import { generateCityMap, resolveNominatimStationName, suggestStationName } from './engine/noise';
+import { applySpawnToMap, generateCityMap, resolveNominatimStationName, suggestStationName } from './engine/noise';
 import { recomputeMapCoverage, TransitRouter } from './engine/pathfinding';
 import {
   analyzeTrackCrossing,
@@ -38,6 +42,7 @@ import {
   computeNetworkMileageKm,
   DEFAULT_FARE_POLICY,
   findLockedDistrictAt,
+  findRegionAtWorld,
   getCityUnlockCost,
   getCityUnlockPrereq,
   getDistrictUnlockCost,
@@ -66,7 +71,7 @@ import {
   purgeTaiwanFromMap,
 } from './engine/chinaGeoLoader';
 import { detectIsChinaUserSync, verifyChinaUserIpCountry } from './engine/regionPolicy';
-import { formatCurrencyWan } from './i18n/translations';
+import { formatCurrencyWan, formatPop } from './i18n/translations';
 import { TitleScreen } from './components/TitleScreen';
 import { MetroCanvas, MetroCanvasHandle } from './components/MetroCanvas';
 import { FloatingHud } from './components/FloatingHud';
@@ -321,11 +326,16 @@ function createHistoryEntry(
 }
 
 export default function App() {
-  const initialMap = generateCityMap('real_city', 1990, 'shanghai');
-  const starter = buildStarterNetwork(initialMap, 'shanghai');
+  const routerRef = useRef(new TransitRouter());
+  const [{ initialMap, starter }] = useState(() => {
+    const map = generateCityMap('real_city', 1990, 'shanghai');
+    const net = buildStarterNetwork(map, 'shanghai');
+    routerRef.current.rebuild(net.stations, net.segments, net.lines);
+    recomputeMapCoverage(map, net.stations);
+    return { initialMap: map, starter: net };
+  });
 
   const canvasHandleRef = useRef<MetroCanvasHandle>(null);
-  const routerRef = useRef(new TransitRouter());
   const simDataRef = useRef<{
     map: CityMap;
     stations: Station[];
@@ -336,15 +346,6 @@ export default function App() {
     stations: starter.stations,
     segments: starter.segments,
     lines: starter.lines,
-  });
-
-  useState(() => {
-    routerRef.current.rebuild(
-      simDataRef.current.stations,
-      simDataRef.current.segments,
-      simDataRef.current.lines
-    );
-    recomputeMapCoverage(simDataRef.current.map, simDataRef.current.stations);
   });
 
   const [lang, setLang] = useState<Language>('zh-Hant');
@@ -483,6 +484,13 @@ export default function App() {
 
   const [muted, setMuted] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
+  const [selectingSpawn, setSelectingSpawn] = useState(false);
+  const [spawnPreview, setSpawnPreview] = useState<SpawnConfig | null>(
+    () => initialMap.spawnConfig ?? null
+  );
+  const [spawnSearch, setSpawnSearch] = useState('');
+  const [confirmingSpawn, setConfirmingSpawn] = useState(false);
+  const applyingSetupRef = useRef(false);
   const [gddOpen, setGddOpen] = useState(false);
   const [cityStatsOpen, setCityStatsOpen] = useState(false);
   const [networkMapOpen, setNetworkMapOpen] = useState(false);
@@ -551,9 +559,19 @@ export default function App() {
     );
   }, []);
 
+  const hydratedMapsRef = useRef(new WeakSet<CityMap>());
   useEffect(() => {
-    hydrateRealCityOverpass(simDataRef.current.map);
-  }, [hydrateRealCityOverpass]);
+    if (screen !== 'PLAYING' || selectingSpawn) return;
+    const currentMap = simDataRef.current.map;
+    if (hydratedMapsRef.current.has(currentMap)) return;
+    hydratedMapsRef.current.add(currentMap);
+    const spawn = currentMap.spawnConfig;
+    if (spawn && spawn.provinceId !== 'prov_sh') {
+      hydrateCityOverpassAt(currentMap, spawn.lat, spawn.lon);
+    } else {
+      hydrateRealCityOverpass(currentMap);
+    }
+  }, [screen, selectingSpawn, mapSeedKey, hydrateCityOverpassAt, hydrateRealCityOverpass]);
 
   const syncUiSnapshots = useCallback(() => {
     const sim = simDataRef.current;
@@ -765,7 +783,7 @@ export default function App() {
 
   // Keyboard shortcuts (including T for 2D/2.5D toggle)
   useEffect(() => {
-    if (screen !== 'PLAYING') return;
+    if (screen !== 'PLAYING' || selectingSpawn) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
       const k = e.key.toLowerCase();
@@ -785,7 +803,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [screen]);
+  }, [screen, selectingSpawn]);
 
   const pushDraftUndo = useCallback(() => {
     const sim = simDataRef.current;
@@ -1820,64 +1838,302 @@ export default function App() {
     [handleUnlockRegion]
   );
 
-  const handleApplyNewSetup = (
-    nextRealCity: RealCityId,
-    nextDifficulty: DifficultyLevel,
-    seed: number
-  ) => {
-    const newMap = generateCityMap('real_city', seed, nextRealCity);
-    const diffCfg = DIFFICULTIES[nextDifficulty];
+  const handleApplyNewSetup = useCallback(
+    async (
+      nextRealCity: RealCityId,
+      nextDifficulty: DifficultyLevel,
+      seed: number,
+      spawnInput?: SpawnConfig
+    ) => {
+      if (applyingSetupRef.current) return;
+      applyingSetupRef.current = true;
+      setConfirmingSpawn(true);
+      try {
+        const allowTw = isChinaUserRef.current;
+        const safeSpawn =
+          spawnInput &&
+          (allowTw ||
+            (spawnInput.provinceId !== 'prov_710000' && spawnInput.provinceAdcode !== '710000'))
+            ? spawnInput
+            : undefined;
 
-    setRealCityId(nextRealCity);
-    setDifficultyId(nextDifficulty);
+        const newMap = generateCityMap('real_city', seed, nextRealCity, safeSpawn);
+        await loadNationalProvinces(newMap, allowTw);
 
-    const starterLine = createEmptyLine(0);
-    simDataRef.current = {
-      map: newMap,
-      stations: [],
-      segments: [],
-      lines: [starterLine],
-    };
+        let resolvedSpawn = newMap.spawnConfig;
+        if (safeSpawn) {
+          await ensureProvinceChunkLoaded(newMap, safeSpawn.provinceId);
+          resolvedSpawn = applySpawnToMap(newMap, safeSpawn);
+        }
 
-    timeRef.current = {
-      minutes: 8 * 60,
-      day: 1,
-      year: newMap.startYear,
-      money: diffCfg.startingMoney,
-      dailyRidership: 0,
-      totalRidership: 0,
-      dailyRevenue: 0,
-      satisfaction: 88,
-      avgFare: DEFAULT_FARE_POLICY.baseFare,
-    };
+        const diffCfg = DIFFICULTIES[nextDifficulty];
+        setRealCityId(nextRealCity);
+        setDifficultyId(nextDifficulty);
 
-    setDraftPast([]);
-    setDraftFuture([]);
-    setMonthlyCapexWan(0);
-    loansRef.current = [];
-    setLoans([]);
-    setActiveLineId(starterLine.id);
-    setSelectedStationId(null);
-    setTrackStartStationId(null);
-    setTrackWaypoint(null);
-    setMapSeedKey(`${newMap.mode}_${newMap.seed}`);
-    setTool('station');
-    setScreen('PLAYING');
+        const starterLine = createEmptyLine(0);
+        simDataRef.current = {
+          map: newMap,
+          stations: [],
+          segments: [],
+          lines: [starterLine],
+        };
 
-    routerRef.current.rebuild([], [], [starterLine]);
-    const freshStats = computeStatsObj(simDataRef.current);
-    setHistory([createHistoryEntry(newMap.startYear, 1, freshStats, [], [starterLine])]);
-    syncUiSnapshots();
-    hydrateRealCityOverpass(newMap);
-    loadNationalProvinces(newMap, isChinaUserRef.current).then((changed) => {
-      if (changed && simDataRef.current.map === newMap) {
-        recomputeMapCoverage(newMap, simDataRef.current.stations);
+        timeRef.current = {
+          minutes: 8 * 60,
+          day: 1,
+          year: newMap.startYear,
+          money: diffCfg.startingMoney,
+          dailyRidership: 0,
+          totalRidership: 0,
+          dailyRevenue: 0,
+          satisfaction: 88,
+          avgFare: DEFAULT_FARE_POLICY.baseFare,
+        };
+
+        setDraftPast([]);
+        setDraftFuture([]);
+        setMonthlyCapexWan(0);
+        loansRef.current = [];
+        setLoans([]);
+        setActiveLineId(starterLine.id);
+        setSelectedStationId(null);
+        setTrackStartStationId(null);
+        setTrackWaypoint(null);
+        setSelectingSpawn(false);
+        setSpawnPreview(resolvedSpawn ?? null);
+        setMapSeedKey(`${newMap.mode}_${newMap.seed}`);
         setMapVersion((v) => v + 1);
+        setTool('station');
+        setSpeed(1);
+        setScreen('PLAYING');
+
+        routerRef.current.rebuild([], [], [starterLine]);
+        const freshStats = computeStatsObj(simDataRef.current);
+        setHistory([createHistoryEntry(newMap.startYear, 1, freshStats, [], [starterLine])]);
         syncUiSnapshots();
+
+        if (resolvedSpawn && resolvedSpawn.provinceId !== 'prov_sh') {
+          hydratedMapsRef.current.add(newMap);
+          hydrateCityOverpassAt(newMap, resolvedSpawn.lat, resolvedSpawn.lon);
+        } else {
+          hydratedMapsRef.current.add(newMap);
+          hydrateRealCityOverpass(newMap);
+        }
+
+        setTimeout(() => {
+          canvasHandleRef.current?.resetView();
+        }, 90);
+
+        showToast(`已於「${resolvedSpawn?.cityName ?? newMap.name}」開局 (${diffCfg.label})`);
+      } finally {
+        applyingSetupRef.current = false;
+        setConfirmingSpawn(false);
       }
-    });
-    showToast(`已載入：${newMap.name} (${diffCfg.label})`);
-  };
+    },
+    [computeStatsObj, hydrateCityOverpassAt, hydrateRealCityOverpass, showToast, syncUiSnapshots]
+  );
+
+  const handleEnterMapSpawnPicker = useCallback(
+    async (nextDiff?: DifficultyLevel) => {
+      if (nextDiff) setDifficultyId(nextDiff);
+      setSetupOpen(false);
+      setSpeed(0);
+      setScreen('PLAYING');
+      setSelectingSpawn(true);
+      setSpawnSearch('');
+
+      const sim = simDataRef.current;
+      await loadNationalProvinces(sim.map, isChinaUserRef.current);
+      if (!isChinaUserRef.current) {
+        purgeTaiwanFromMap(sim.map);
+      }
+      setMapVersion((v) => v + 1);
+
+      setSpawnPreview((prev) => {
+        if (
+          prev &&
+          (isChinaUserRef.current ||
+            (prev.provinceId !== 'prov_710000' && prev.provinceAdcode !== '710000'))
+        ) {
+          return prev;
+        }
+        return (
+          sim.map.spawnConfig ?? {
+            provinceId: 'prov_sh',
+            provinceAdcode: '310000',
+            provinceName: '上海市',
+            cityId: 'city_sh',
+            cityName: '上海市',
+            districtId: 'd_hp',
+            districtName: '黃浦區',
+            lat: 31.232,
+            lon: 121.475,
+            wx: sim.map.width * 0.5,
+            wy: sim.map.height * 0.5,
+          }
+        );
+      });
+
+      setTimeout(() => {
+        canvasHandleRef.current?.fitNationalView();
+      }, 80);
+      showToast('請在地圖上點擊任意省市區作為開局出生點');
+    },
+    [showToast]
+  );
+
+  const handleSelectSpawnPoint = useCallback(
+    async (wx: number, wy: number) => {
+      const sim = simDataRef.current;
+      let hit = findRegionAtWorld(sim.map, wx, wy);
+      if (!hit.province) {
+        soundEngine.playError();
+        showToast('請點擊中國陸域任意省份、地級市或港澳地區');
+        return;
+      }
+      const prov = hit.province;
+      if (
+        !isChinaUserRef.current &&
+        (prov.isTaiwan || prov.id === 'prov_710000' || prov.adcode === '710000')
+      ) {
+        return;
+      }
+
+      const prevProvId = spawnPreview?.provinceId;
+      if (!prov.loaded) {
+        showToast(`正在載入「${prov.name}」市區邊界...`);
+        await ensureProvinceChunkLoaded(sim.map, prov.id);
+        if (simDataRef.current.map !== sim.map) return;
+        setMapVersion((v) => v + 1);
+        hit = findRegionAtWorld(sim.map, wx, wy);
+      }
+
+      const provCities = (sim.map.cities ?? []).filter((c) => c.provinceId === prov.id);
+      let chosenCity = hit.city;
+      if (!chosenCity && provCities.length > 0) {
+        chosenCity = [...provCities].sort(
+          (a, b) => Math.hypot(a.x - wx, a.y - wy) - Math.hypot(b.x - wx, b.y - wy)
+        )[0];
+      }
+
+      let chosenDist = hit.district;
+      if (!chosenDist && chosenCity) {
+        const cityDists = sim.map.districts.filter((d) => d.cityId === chosenCity!.id);
+        if (cityDists.length > 0) {
+          chosenDist = [...cityDists].sort(
+            (a, b) => Math.hypot(a.x - wx, a.y - wy) - Math.hypot(b.x - wx, b.y - wy)
+          )[0];
+        }
+      }
+
+      let lat = chosenCity?.lat ?? prov.lat ?? 31.232;
+      let lon = chosenCity?.lon ?? prov.lon ?? 121.475;
+      if (sim.map.geoBounds) {
+        const ll = worldToLatLon(wx, wy, sim.map.geoBounds, sim.map.width, sim.map.height);
+        lat = ll.lat;
+        lon = ll.lon;
+      }
+
+      const nextSpawn: SpawnConfig = {
+        provinceId: prov.id,
+        provinceAdcode: prov.adcode,
+        provinceName: prov.name,
+        cityId: chosenCity?.id ?? prov.closestCityId ?? '',
+        cityName: chosenCity?.name ?? prov.name,
+        districtId: chosenDist?.id,
+        districtName: chosenDist?.name,
+        lat,
+        lon,
+        wx,
+        wy,
+      };
+      soundEngine.playUiClick();
+      setSpawnPreview(nextSpawn);
+      if (prevProvId !== prov.id && !hit.district) {
+        canvasHandleRef.current?.flyToLatLon(lat, lon, 7.6);
+      }
+    },
+    [showToast, spawnPreview?.provinceId]
+  );
+
+  const handleJumpSpawnTarget = useCallback(
+    async (kind: 'province' | 'city', prov: ProvinceRegionInfo, city?: CityRegionInfo) => {
+      if (
+        !isChinaUserRef.current &&
+        (prov.isTaiwan || prov.id === 'prov_710000' || prov.adcode === '710000')
+      ) {
+        return;
+      }
+      const sim = simDataRef.current;
+      if (!prov.loaded) {
+        await ensureProvinceChunkLoaded(sim.map, prov.id);
+        if (simDataRef.current.map !== sim.map) return;
+        setMapVersion((v) => v + 1);
+      }
+
+      const targetCity =
+        city ??
+        (sim.map.cities ?? []).find((c) => c.provinceId === prov.id && c.id === prov.closestCityId) ??
+        (sim.map.cities ?? []).find((c) => c.provinceId === prov.id);
+      const cityDists = targetCity
+        ? sim.map.districts.filter((d) => d.cityId === targetCity.id)
+        : sim.map.districts.filter((d) => d.provinceId === prov.id);
+      const leadDist = cityDists[0];
+
+      const wx = targetCity?.x ?? prov.x;
+      const wy = targetCity?.y ?? prov.y;
+      const lat = targetCity?.lat ?? prov.lat ?? 31.232;
+      const lon = targetCity?.lon ?? prov.lon ?? 121.475;
+
+      setSpawnPreview({
+        provinceId: prov.id,
+        provinceAdcode: prov.adcode,
+        provinceName: prov.name,
+        cityId: targetCity?.id ?? prov.closestCityId ?? '',
+        cityName: targetCity?.name ?? prov.name,
+        districtId: leadDist?.id,
+        districtName: leadDist?.name,
+        lat,
+        lon,
+        wx,
+        wy,
+      });
+      setSpawnSearch('');
+      soundEngine.playUiClick();
+      canvasHandleRef.current?.flyToLatLon(lat, lon, kind === 'city' ? 9.0 : 7.6);
+    },
+    []
+  );
+
+  const handleRandomSpawn = useCallback(async () => {
+    const sim = simDataRef.current;
+    const pool = (sim.map.provinces ?? []).filter(
+      (p) => isChinaUserRef.current || (!p.isTaiwan && p.id !== 'prov_710000' && p.adcode !== '710000')
+    );
+    if (pool.length === 0) return;
+    const prov = pool[Math.floor(Math.random() * pool.length)];
+    if (!prov.loaded) {
+      await ensureProvinceChunkLoaded(sim.map, prov.id);
+      if (simDataRef.current.map !== sim.map) return;
+      setMapVersion((v) => v + 1);
+    }
+    const provCities = (sim.map.cities ?? []).filter((c) => c.provinceId === prov.id);
+    const city =
+      provCities.length > 0
+        ? provCities[Math.floor(Math.random() * provCities.length)]
+        : undefined;
+    await handleJumpSpawnTarget(city ? 'city' : 'province', prov, city);
+  }, [handleJumpSpawnTarget]);
+
+  const handleConfirmSpawn = useCallback(() => {
+    const chosen = spawnPreview ?? simDataRef.current.map.spawnConfig;
+    void handleApplyNewSetup(
+      realCityId,
+      difficultyId,
+      Math.floor(Math.random() * 100000),
+      chosen
+    );
+  }, [difficultyId, handleApplyNewSetup, realCityId, spawnPreview]);
 
   const handleBuildDemoNetwork = () => {
     const sim = simDataRef.current;
@@ -1905,6 +2161,80 @@ export default function App() {
     return Math.min(9, count);
   }, [stats.congestionIndex, stats.coveragePercent]);
 
+  const visibleProvincesList = useMemo(
+    () =>
+      (simDataRef.current.map.provinces ?? []).filter(
+        (p) => isChinaUser || (!p.isTaiwan && p.id !== 'prov_710000' && p.adcode !== '710000')
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isChinaUser, mapVersion, mapSeedKey]
+  );
+
+  const visibleCitiesList = useMemo(
+    () =>
+      (simDataRef.current.map.cities ?? []).filter(
+        (c) => isChinaUser || (!c.isTaiwan && c.provinceId !== 'prov_710000')
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [isChinaUser, mapVersion, mapSeedKey]
+  );
+
+  const spawnSearchResults = useMemo(() => {
+    const q = spawnSearch.trim();
+    if (!q) return [];
+    const results: Array<{
+      kind: 'province' | 'city';
+      label: string;
+      sub: string;
+      prov: ProvinceRegionInfo;
+      city?: CityRegionInfo;
+    }> = [];
+    for (const c of visibleCitiesList) {
+      if (c.name.includes(q)) {
+        const prov = visibleProvincesList.find((p) => p.id === c.provinceId);
+        if (prov) {
+          results.push({
+            kind: 'city',
+            label: c.name,
+            sub: prov.name,
+            prov,
+            city: c,
+          });
+        }
+      }
+      if (results.length >= 10) break;
+    }
+    for (const p of visibleProvincesList) {
+      if (p.name.includes(q)) {
+        results.push({
+          kind: 'province',
+          label: p.name,
+          sub: p.closestCityName ? `省會 / 核心：${p.closestCityName}` : '省級行政區',
+          prov: p,
+        });
+      }
+      if (results.length >= 14) break;
+    }
+    return results;
+  }, [spawnSearch, visibleCitiesList, visibleProvincesList]);
+
+  const spawnPreviewStats = useMemo(() => {
+    if (!spawnPreview) return null;
+    const dist = spawnPreview.districtId
+      ? simDataRef.current.map.districts.find((d) => d.id === spawnPreview.districtId)
+      : undefined;
+    const prov = simDataRef.current.map.provinces?.find((p) => p.id === spawnPreview.provinceId);
+    const cityDists = spawnPreview.cityId
+      ? simDataRef.current.map.districts.filter((d) => d.cityId === spawnPreview.cityId)
+      : [];
+    const cityPop = cityDists.reduce((s, d) => s + (d.realPopulation ?? 0), 0);
+    return {
+      pop: dist?.realPopulation ?? (cityPop > 0 ? cityPop : prov?.provincePopulation),
+      distCount: cityDists.length,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spawnPreview, mapVersion, mapSeedKey]);
+
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#F5F7FA] text-slate-900">
       {screen === 'TITLE' ? (
@@ -1917,6 +2247,7 @@ export default function App() {
             setMuted(next);
           }}
           onStartNewGame={() => setSetupOpen(true)}
+          onSelectSpawnOnMap={() => void handleEnterMapSpawnPicker()}
           onContinueGame={() => setScreen('PLAYING')}
           onQuickDemo={() => {
             handleBuildDemoNetwork();
@@ -1947,6 +2278,9 @@ export default function App() {
             difficulty={difficulty}
             is25D={is25D}
             includeTaiwan={isChinaUser}
+            selectingSpawn={selectingSpawn}
+            spawnPreview={spawnPreview}
+            onSelectSpawnPoint={(wx, wy) => void handleSelectSpawnPoint(wx, wy)}
             onPlaceStation={handlePlaceStation}
             onInsertStationOnSegment={handleInsertStationOnSegment}
             onSelectStation={setSelectedStationId}
@@ -1960,105 +2294,264 @@ export default function App() {
             onUnlockRegion={handleUnlockRegion}
           />
 
-          {/* Floating Frosted-Glass HUD Islands */}
-          <FloatingHud
-            lang={lang}
-            onChangeLang={setLang}
-            map={simDataRef.current.map}
-            difficulty={difficulty}
-            gameMinutesOfDay={gameMinutesOfDay}
-            day={day}
-            year={year}
-            speed={speed}
-            onChangeSpeed={setSpeed}
-            onAdvanceMonth={handleAdvanceMonth}
-            money={money}
-            loans={loans}
-            onTakeLoan={handleTakeLoan}
-            onRepayLoan={handleRepayLoan}
-            stats={stats}
-            farePolicy={farePolicy}
-            monthlyCapexWan={monthlyCapexWan}
-            tool={tool}
-            onSelectTool={(t) => {
-              setTool(t);
-              if (t !== 'track') {
+          {/* Interactive On-Map Spawn Picker Overlay OR Normal Gameplay HUD */}
+          {selectingSpawn ? (
+            <>
+              {/* Top Spawn Picker Control Bar */}
+              <div className="fixed top-3 left-3 right-3 z-30 flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 rounded-xl bg-white/92 backdrop-blur-md border border-slate-200 shadow-[0_10px_28px_rgba(15,23,42,0.08)]">
+                <div className="flex flex-wrap items-center gap-3 min-w-0">
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Compass className="w-4 h-4 text-emerald-600" />
+                    <span className="text-sm font-bold text-slate-950 whitespace-nowrap">
+                      選擇開局出生點
+                    </span>
+                  </div>
+
+                  {/* Quick Province / City Jump Search */}
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={spawnSearch}
+                      onChange={(e) => setSpawnSearch(e.target.value)}
+                      placeholder="跳轉省份或城市（如 廣州、成都、北京）"
+                      className="pl-8 pr-3 py-1.5 w-60 sm:w-64 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:border-blue-500 text-xs text-slate-900"
+                    />
+                    {spawnSearchResults.length > 0 && (
+                      <div className="absolute left-0 top-full mt-1.5 w-72 max-h-64 overflow-y-auto rounded-xl bg-white border border-slate-200 shadow-[0_14px_32px_rgba(15,23,42,0.14)] divide-y divide-slate-100 z-40">
+                        {spawnSearchResults.map((item, idx) => (
+                          <button
+                            key={`${item.kind}_${item.prov.id}_${item.city?.id ?? idx}`}
+                            type="button"
+                            onClick={() => void handleJumpSpawnTarget(item.kind, item.prov, item.city)}
+                            className="w-full px-3 py-2 text-left hover:bg-blue-50/70 transition-colors flex items-center justify-between gap-2 cursor-pointer"
+                          >
+                            <span className="text-xs font-semibold text-slate-900">{item.label}</span>
+                            <span className="text-[11px] text-slate-500 truncate">{item.sub}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => canvasHandleRef.current?.fitNationalView()}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <Globe2 className="w-3.5 h-3.5" />
+                    <span>全國視角</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleRandomSpawn()}
+                    className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <Shuffle className="w-3.5 h-3.5" />
+                    <span>隨機選址</span>
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  {/* Difficulty Segmented Switch */}
+                  <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                    {(Object.keys(DIFFICULTIES) as DifficultyLevel[]).map((lvl) => {
+                      const active = difficultyId === lvl;
+                      return (
+                        <button
+                          key={lvl}
+                          type="button"
+                          onClick={() => setDifficultyId(lvl)}
+                          className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                            active
+                              ? 'bg-white text-slate-950 shadow-xs font-semibold'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          {DIFFICULTIES[lvl].label.split(' ')[0]}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectingSpawn(false);
+                      setSetupOpen(true);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-medium flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>返回清單</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Bottom Selected Spawn Confirmation Dock */}
+              <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-30 w-[calc(100%-24px)] max-w-2xl px-5 py-3.5 rounded-xl bg-white/95 backdrop-blur-md border border-slate-200 shadow-[0_16px_38px_rgba(15,23,42,0.14)] flex flex-wrap items-center justify-between gap-4">
+                <div className="min-w-0 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <MapPin className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span className="text-sm font-bold text-slate-950 truncate">
+                      {spawnPreview
+                        ? `${spawnPreview.provinceName}${
+                            spawnPreview.cityName && spawnPreview.cityName !== spawnPreview.provinceName
+                              ? ` · ${spawnPreview.cityName}`
+                              : ''
+                          }${spawnPreview.districtName ? ` · ${spawnPreview.districtName}` : ''}`
+                        : '請於地圖點選出生位置'}
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-x-2 text-[11px] font-mono-tabular text-slate-500 pl-6">
+                    {spawnPreview && (
+                      <span>
+                        {spawnPreview.lat.toFixed(3)}°N, {spawnPreview.lon.toFixed(3)}°E
+                      </span>
+                    )}
+                    {spawnPreviewStats?.pop ? (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span>區域人口 {formatPop(spawnPreviewStats.pop, lang)}</span>
+                      </>
+                    ) : null}
+                    <span aria-hidden="true">·</span>
+                    <span>
+                      初始資金 {formatCurrencyWan(DIFFICULTIES[difficultyId].startingMoney, lang)}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  {spawnPreview && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        canvasHandleRef.current?.flyToLatLon(spawnPreview.lat, spawnPreview.lon, 9.5)
+                      }
+                      className="px-3 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+                    >
+                      <Crosshair className="w-3.5 h-3.5" />
+                      <span>拉近查看</span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    disabled={!spawnPreview || confirmingSpawn}
+                    onClick={handleConfirmSpawn}
+                    className={`px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 ${
+                      !spawnPreview || confirmingSpawn
+                        ? 'bg-slate-200 text-slate-500 cursor-not-allowed'
+                        : 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer'
+                    }`}
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>{confirmingSpawn ? '載入城區中...' : '確定以此為出生點開局'}</span>
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <FloatingHud
+              lang={lang}
+              onChangeLang={setLang}
+              map={simDataRef.current.map}
+              difficulty={difficulty}
+              gameMinutesOfDay={gameMinutesOfDay}
+              day={day}
+              year={year}
+              speed={speed}
+              onChangeSpeed={setSpeed}
+              onAdvanceMonth={handleAdvanceMonth}
+              money={money}
+              loans={loans}
+              onTakeLoan={handleTakeLoan}
+              onRepayLoan={handleRepayLoan}
+              stats={stats}
+              farePolicy={farePolicy}
+              monthlyCapexWan={monthlyCapexWan}
+              tool={tool}
+              onSelectTool={(t) => {
+                setTool(t);
+                if (t !== 'track') {
+                  setTrackStartStationId(null);
+                  setTrackWaypoint(null);
+                }
+              }}
+              stationSize={stationSize}
+              onSelectStationSize={setStationSize}
+              elevationMode={elevationMode}
+              onSelectElevationMode={(m) => {
+                setElevationMode(m);
+                if (m === 'elevated') setActiveDepth('EL');
+                else if (activeDepth === 'EL') setActiveDepth('B1');
+              }}
+              activeDepth={activeDepth}
+              onSelectDepth={(d) => {
+                setActiveDepth(d);
+                setElevationMode(d === 'EL' ? 'elevated' : 'underground');
+              }}
+              draftMode={draftMode}
+              onToggleDraftMode={() => setDraftMode((d) => !d)}
+              draftCount={draftSummary.count}
+              draftCostWan={draftSummary.costWan}
+              draftWarnings={draftSummary.warnings}
+              canUndoDraft={draftPast.length > 0}
+              canRedoDraft={draftFuture.length > 0}
+              onUndoDraft={handleUndoDraft}
+              onRedoDraft={handleRedoDraft}
+              onDiscardDraft={handleDiscardDraft}
+              onConfirmDraft={handleConfirmDraft}
+              lines={linesSnapshot}
+              stations={stationsSnapshot}
+              segments={segmentsSnapshot}
+              activeLineId={activeLineId}
+              onSelectLine={setActiveLineId}
+              onCreateLine={handleCreateLine}
+              onUpdateLine={handleUpdateLine}
+              selectedStation={selectedStation}
+              onClearSelectedStation={() => setSelectedStationId(null)}
+              onUpdateStation={handleUpdateStation}
+              onUpgradeStation={handleUpgradeStation}
+              onDevelopTod={handleDevelopStationTod}
+              onDeleteStation={handleDeleteStation}
+              layers={layers}
+              onToggleLayer={(key) => setLayers((prev) => ({ ...prev, [key]: !prev[key] }))}
+              onChangeDepthFilter={(df) => setLayers((prev) => ({ ...prev, depthFilter: df }))}
+              openMapStyle={openMapStyle}
+              onChangeOpenMapStyle={setOpenMapStyle}
+              is25D={is25D}
+              onToggle25D={() => setIs25D((v) => !v)}
+              onZoomIn={() => canvasHandleRef.current?.zoomBy(1.18)}
+              onZoomOut={() => canvasHandleRef.current?.zoomBy(0.85)}
+              onResetView={() => canvasHandleRef.current?.resetView()}
+              onSearchJump={(wx, wy, label) => {
+                canvasHandleRef.current?.focusAt(wx, wy, 1.25);
+                showToast(`已定位至：${label}`);
+              }}
+              trackStartStationName={trackStartStation?.name ?? null}
+              hasTrackWaypoint={trackWaypoint !== null}
+              onCancelTrackDraw={() => {
                 setTrackStartStationId(null);
                 setTrackWaypoint(null);
-              }
-            }}
-            stationSize={stationSize}
-            onSelectStationSize={setStationSize}
-            elevationMode={elevationMode}
-            onSelectElevationMode={(m) => {
-              setElevationMode(m);
-              if (m === 'elevated') setActiveDepth('EL');
-              else if (activeDepth === 'EL') setActiveDepth('B1');
-            }}
-            activeDepth={activeDepth}
-            onSelectDepth={(d) => {
-              setActiveDepth(d);
-              setElevationMode(d === 'EL' ? 'elevated' : 'underground');
-            }}
-            draftMode={draftMode}
-            onToggleDraftMode={() => setDraftMode((d) => !d)}
-            draftCount={draftSummary.count}
-            draftCostWan={draftSummary.costWan}
-            draftWarnings={draftSummary.warnings}
-            canUndoDraft={draftPast.length > 0}
-            canRedoDraft={draftFuture.length > 0}
-            onUndoDraft={handleUndoDraft}
-            onRedoDraft={handleRedoDraft}
-            onDiscardDraft={handleDiscardDraft}
-            onConfirmDraft={handleConfirmDraft}
-            lines={linesSnapshot}
-            stations={stationsSnapshot}
-            segments={segmentsSnapshot}
-            activeLineId={activeLineId}
-            onSelectLine={setActiveLineId}
-            onCreateLine={handleCreateLine}
-            onUpdateLine={handleUpdateLine}
-            selectedStation={selectedStation}
-            onClearSelectedStation={() => setSelectedStationId(null)}
-            onUpdateStation={handleUpdateStation}
-            onUpgradeStation={handleUpgradeStation}
-            onDevelopTod={handleDevelopStationTod}
-            onDeleteStation={handleDeleteStation}
-            layers={layers}
-            onToggleLayer={(key) => setLayers((prev) => ({ ...prev, [key]: !prev[key] }))}
-            onChangeDepthFilter={(df) => setLayers((prev) => ({ ...prev, depthFilter: df }))}
-            openMapStyle={openMapStyle}
-            onChangeOpenMapStyle={setOpenMapStyle}
-            is25D={is25D}
-            onToggle25D={() => setIs25D((v) => !v)}
-            onZoomIn={() => canvasHandleRef.current?.zoomBy(1.18)}
-            onZoomOut={() => canvasHandleRef.current?.zoomBy(0.85)}
-            onResetView={() => canvasHandleRef.current?.resetView()}
-            onSearchJump={(wx, wy, label) => {
-              canvasHandleRef.current?.focusAt(wx, wy, 1.25);
-              showToast(`已定位至：${label}`);
-            }}
-            trackStartStationName={trackStartStation?.name ?? null}
-            hasTrackWaypoint={trackWaypoint !== null}
-            onCancelTrackDraw={() => {
-              setTrackStartStationId(null);
-              setTrackWaypoint(null);
-            }}
-            muted={muted}
-            onToggleMute={() => {
-              const next = !muted;
-              soundEngine.muted = next;
-              setMuted(next);
-            }}
-            onOpenSetup={() => setSetupOpen(true)}
-            onOpenGdd={() => setGddOpen(true)}
-            onReturnTitle={() => setScreen('TITLE')}
-            onOpenCityStats={() => setCityStatsOpen(true)}
-            onOpenNetworkMap={() => setNetworkMapOpen(true)}
-            onOpenMetroCore={(tab = 'overview') => setMetroCoreState({ open: true, tab })}
-            onOpenMetroCircle={() => setMetroCircleOpen(true)}
-            unreadCircleCount={unreadCircleCount}
-          />
+              }}
+              muted={muted}
+              onToggleMute={() => {
+                const next = !muted;
+                soundEngine.muted = next;
+                setMuted(next);
+              }}
+              onOpenSetup={() => setSetupOpen(true)}
+              onOpenGdd={() => setGddOpen(true)}
+              onReturnTitle={() => setScreen('TITLE')}
+              onOpenCityStats={() => setCityStatsOpen(true)}
+              onOpenNetworkMap={() => setNetworkMapOpen(true)}
+              onOpenMetroCore={(tab = 'overview') => setMetroCoreState({ open: true, tab })}
+              onOpenMetroCircle={() => setMetroCircleOpen(true)}
+              unreadCircleCount={unreadCircleCount}
+            />
+          )}
 
           {/* Clean Architectural Toast Notification */}
           {toast && (
@@ -2166,8 +2659,14 @@ export default function App() {
         lang={lang}
         currentRealCity={realCityId}
         currentDifficulty={difficultyId}
+        provinces={visibleProvincesList}
+        cities={visibleCitiesList}
+        includeTaiwan={isChinaUser}
+        currentSpawn={spawnPreview}
+        onPreloadProvinceChunk={handlePreloadProvinceChunk}
         onClose={() => setSetupOpen(false)}
         onApply={handleApplyNewSetup}
+        onEnterMapSpawnPicker={(diff) => void handleEnterMapSpawnPicker(diff)}
       />
 
       <GddModal open={gddOpen} onClose={() => setGddOpen(false)} />

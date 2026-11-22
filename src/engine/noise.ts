@@ -10,6 +10,7 @@ import {
   ProvinceRegionInfo,
   RealCityId,
   RiverPath,
+  SpawnConfig,
   Station,
   TerrainType,
   ZoneType,
@@ -417,7 +418,8 @@ export function suggestStationName(
         closestDist = d;
       }
     }
-    primaryCandidate = closestDist ? shortDistrictName(closestDist.name) : '上海新站';
+    const fallbackCity = map.spawnConfig?.cityName ? `${map.spawnConfig.cityName}新站` : '新站';
+    primaryCandidate = closestDist ? shortDistrictName(closestDist.name) : fallbackCity;
   }
 
   return ensureUniqueStationName(primaryCandidate, existingStations, wx, wy, hints);
@@ -602,7 +604,8 @@ export function generateBuildingsFromCells(
 export function generateCityMap(
   mode: MapMode,
   seed: number,
-  _realCityId: RealCityId = 'shanghai'
+  _realCityId: RealCityId = 'shanghai',
+  spawn?: SpawnConfig
 ): CityMap {
   // 212x312 grid at 64px = 13568x19968 world covering all of Shanghai (16 districts),
   // ALL 13 cities / 95 districts of Jiangsu, and ALL 11 cities / 90 districts of Zhejiang
@@ -616,9 +619,10 @@ export function generateCityMap(
   const hills: HillContour[] = [];
   const pois: CityPoi[] = [];
 
-  const mapName = '上海啟航 · 全國軌道都市圈 · 1990年';
-  const subtitle = '黃浦江 / 長三角 / 全國各省市區及港澳分級聯動解鎖';
   const startYear = 1990;
+  const spawnCityLabel = spawn?.cityName ?? '上海市';
+  const mapName = `${spawnCityLabel.replace(/市$/, '')}啟航 · 全國軌道都市圈`;
+  const subtitle = '全國各省市區及港澳實景疆域 · 分級聯動解鎖';
   const geoBounds: GeoBounds = createGeoBounds(31.10, 119.65, 11.4, w, h);
 
   const toWorld = (lat: number, lon: number) => latLonToWorld(lat, lon, geoBounds, w, h);
@@ -634,8 +638,53 @@ export function generateCityMap(
     pois.push({ id, name, kind, x: p.x, y: p.y });
   };
 
-  // 1A. Neighboring Provinces & Progressive Cities Metadata with Survey-Grade Boundaries
-  const provinces: ProvinceRegionInfo[] = NEIGHBOR_PROVINCES_WGS84.map((src) => {
+  // 1A. Shanghai Province + City entries + Neighboring Provinces & Progressive Cities Metadata
+  const shCenterPt = toWorld(31.232, 121.475);
+  const shPolygons = SHANGHAI_DISTRICTS_WGS84.flatMap((d) =>
+    d.rings.map((ring) => ring.map(([la, lo]) => toWorld(la, lo)))
+  );
+  const shTotalPop = SHANGHAI_DISTRICTS_WGS84.reduce((s, d) => s + (d.realPopulation ?? 0), 0);
+  const shanghaiProvince: ProvinceRegionInfo = {
+    id: 'prov_sh',
+    adcode: '310000',
+    name: '上海市',
+    x: shCenterPt.x,
+    y: shCenterPt.y,
+    lat: 31.232,
+    lon: 121.475,
+    unlockCostWan: 280000,
+    unlocked: !spawn || spawn.provinceId === 'prov_sh',
+    closestCityId: 'city_sh',
+    closestCityName: '上海市',
+    closestDistrictName: '黃浦區',
+    provincePopulation: shTotalPop,
+    cityCount: 1,
+    districtCount: SHANGHAI_DISTRICTS_WGS84.length,
+    loaded: true,
+    isTaiwan: false,
+    description: '國際金融與航運樞紐 · 下轄黃浦、徐匯、浦東新區等十六區',
+    polygons: shPolygons,
+  };
+
+  const shanghaiCity: CityRegionInfo = {
+    id: 'city_sh',
+    adcode: '310000',
+    name: '上海市',
+    provinceId: 'prov_sh',
+    x: shCenterPt.x,
+    y: shCenterPt.y,
+    lat: 31.232,
+    lon: 121.475,
+    unlockCostWan: 95000,
+    unlocked: !spawn || spawn.provinceId === 'prov_sh',
+    isClosestToShanghai: true,
+    closestDistrictId: 'd_hp',
+    distanceKmFromShanghai: 0,
+    adjacentCityIds: ['city_320500', 'city_330400'],
+    polygons: shPolygons,
+  };
+
+  const neighborProvinces: ProvinceRegionInfo[] = NEIGHBOR_PROVINCES_WGS84.map((src) => {
     const pt = toWorld(src.gatewayCenter[0], src.gatewayCenter[1]);
     const polygons = src.rings.map((ring) => ring.map(([la, lo]) => toWorld(la, lo)));
     const provCities = NEIGHBOR_CITIES_WGS84.filter((c) => c.provinceId === src.id);
@@ -668,7 +717,9 @@ export function generateCityMap(
     };
   });
 
-  const cities: CityRegionInfo[] = NEIGHBOR_CITIES_WGS84.map((src) => {
+  const provinces: ProvinceRegionInfo[] = [shanghaiProvince, ...neighborProvinces];
+
+  const neighborCities: CityRegionInfo[] = NEIGHBOR_CITIES_WGS84.map((src) => {
     const pt = toWorld(src.center[0], src.center[1]);
     const polygons = src.rings.map((ring) => ring.map(([la, lo]) => toWorld(la, lo)));
     return {
@@ -689,11 +740,15 @@ export function generateCityMap(
     };
   });
 
+  const cities: CityRegionInfo[] = [shanghaiCity, ...neighborCities];
+
   // 1B. Administrative boundaries for all 16 Shanghai districts + all 185 Jiangsu & Zhejiang districts
+  const isDefaultShanghaiSpawn = !spawn || (spawn.provinceId === 'prov_sh' && !spawn.districtId);
   const shanghaiDistricts: DistrictInfo[] = SHANGHAI_DISTRICTS_WGS84.map((src) => {
     const centerWorld = toWorld(src.center[0], src.center[1]);
     const polygons = src.rings.map((ring) => ring.map(([la, lo]) => toWorld(la, lo)));
-    const isStarter = startYear >= src.unlockYear;
+    const isStarter = isDefaultShanghaiSpawn && startYear >= src.unlockYear;
+    const baseCost = src.unlockCostWan > 0 ? src.unlockCostWan : 26000;
     return {
       id: src.id,
       name: src.name,
@@ -703,7 +758,7 @@ export function generateCityMap(
       polygon: polygons[0],
       polygons,
       unlockYear: src.unlockYear,
-      unlockCostWan: isStarter ? 0 : src.unlockCostWan,
+      unlockCostWan: isStarter ? 0 : baseCost,
       isStarter,
       unlocked: isStarter,
       growthMultiplier: src.growthMultiplier,
@@ -913,8 +968,51 @@ export function generateCityMap(
       };
     });
 
+  const BUCKET_X = 16;
+  const BUCKET_Y = 24;
+  const bucketW = w / BUCKET_X;
+  const bucketH = h / BUCKET_Y;
+  const districtBuckets: Array<typeof districtChecks> = Array.from(
+    { length: BUCKET_X * BUCKET_Y },
+    () => []
+  );
+  for (const dc of districtChecks) {
+    if (!Number.isFinite(dc.minX)) continue;
+    const x0 = Math.max(0, Math.min(BUCKET_X - 1, Math.floor(dc.minX / bucketW)));
+    const x1 = Math.max(0, Math.min(BUCKET_X - 1, Math.floor(dc.maxX / bucketW)));
+    const y0 = Math.max(0, Math.min(BUCKET_Y - 1, Math.floor(dc.minY / bucketH)));
+    const y1 = Math.max(0, Math.min(BUCKET_Y - 1, Math.floor(dc.maxY / bucketH)));
+    for (let by = y0; by <= y1; by++) {
+      const rowOff = by * BUCKET_X;
+      for (let bx = x0; bx <= x1; bx++) {
+        districtBuckets[rowOff + bx].push(dc);
+      }
+    }
+  }
+
+  const isInsideAnyDistrict = (sx: number, sy: number): boolean => {
+    const bx = Math.max(0, Math.min(BUCKET_X - 1, Math.floor(sx / bucketW)));
+    const by = Math.max(0, Math.min(BUCKET_Y - 1, Math.floor(sy / bucketH)));
+    const list = districtBuckets[by * BUCKET_X + bx];
+    for (let i = 0; i < list.length; i++) {
+      const dc = list[i];
+      if (sx < dc.minX || sx > dc.maxX || sy < dc.minY || sy > dc.maxY) continue;
+      for (let j = 0; j < dc.rings.length; j++) {
+        const rb = dc.rings[j];
+        if (sx >= rb.minX && sx <= rb.maxX && sy >= rb.minY && sy <= rb.maxY && isPointInRing(sx, sy, rb.ring)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
   // 6. Grid terrain & urban demographics strictly masked to real land polygons & grounded in WorldPop 2020
   const wpQGrid = getWorldPopCellQ();
+  const edgeOffsets = [
+    [-0.33, 0], [0.33, 0], [0, -0.33], [0, 0.33],
+    [-0.33, -0.33], [0.33, -0.33], [-0.33, 0.33], [0.33, 0.33],
+  ];
   for (let gy = 0; gy < rows; gy++) {
     for (let gx = 0; gx < cols; gx++) {
       const wx = (gx + 0.5) * cellSize;
@@ -922,26 +1020,15 @@ export function generateCityMap(
       const nx = gx / cols;
       const ny = gy / rows;
 
-      const sampleOffsets = [
-        [0, 0],
-        [-0.33, 0], [0.33, 0], [0, -0.33], [0, 0.33],
-        [-0.33, -0.33], [0.33, -0.33], [-0.33, 0.33], [0.33, 0.33],
-      ];
-      let insideLandDistrict = false;
-      for (const [ox, oy] of sampleOffsets) {
-        const sx = wx + ox * cellSize;
-        const sy = wy + oy * cellSize;
-        for (const dc of districtChecks) {
-          if (sx < dc.minX || sx > dc.maxX || sy < dc.minY || sy > dc.maxY) continue;
-          for (const rb of dc.rings) {
-            if (sx >= rb.minX && sx <= rb.maxX && sy >= rb.minY && sy <= rb.maxY && isPointInRing(sx, sy, rb.ring)) {
-              insideLandDistrict = true;
-              break;
-            }
+      let insideLandDistrict = isInsideAnyDistrict(wx, wy);
+      if (!insideLandDistrict) {
+        for (let k = 0; k < edgeOffsets.length; k++) {
+          const [ox, oy] = edgeOffsets[k];
+          if (isInsideAnyDistrict(wx + ox * cellSize, wy + oy * cellSize)) {
+            insideLandDistrict = true;
+            break;
           }
-          if (insideLandDistrict) break;
         }
-        if (insideLandDistrict) break;
       }
 
       let isWater = !insideLandDistrict;
@@ -1044,6 +1131,20 @@ export function generateCityMap(
   const roads: CityMap['roads'] = []; // Loaded asynchronously via OpenStreetMap Overpass
   const buildings = generateBuildingsFromCells(cols, rows, cellSize, cells, seed);
 
+  const spawnConfig: SpawnConfig = spawn ?? {
+    provinceId: 'prov_sh',
+    provinceAdcode: '310000',
+    provinceName: '上海市',
+    cityId: 'city_sh',
+    cityName: '上海市',
+    districtId: 'd_hp',
+    districtName: '黃浦區',
+    lat: 31.232,
+    lon: 121.475,
+    wx: shCenterPt.x,
+    wy: shCenterPt.y,
+  };
+
   return {
     cols,
     rows,
@@ -1066,5 +1167,154 @@ export function generateCityMap(
     buildings,
     pois,
     geoBounds,
+    spawnConfig,
   };
 }
+
+const SHANGHAI_BASE_COST_BY_ID = new Map<string, number>(
+  SHANGHAI_DISTRICTS_WGS84.map((d) => [d.id, d.unlockCostWan > 0 ? d.unlockCostWan : 26000])
+);
+
+const NEIGHBOR_BASE_COST_BY_ID = new Map<string, number>(
+  NEIGHBOR_DISTRICTS_WGS84.map((d) => [d.id, d.unlockCostWan > 0 ? d.unlockCostWan : 18000])
+);
+
+/**
+ * Picks the highest-density urban core city/districts for a chosen spawn point across any loaded
+ * province/city/district in China, resetting starter territory cleanly to that spawn region.
+ */
+export function applySpawnToMap(
+  map: CityMap,
+  spawnInput: Partial<SpawnConfig> & { provinceId: string }
+): SpawnConfig {
+  const prov =
+    map.provinces?.find((p) => p.id === spawnInput.provinceId) ??
+    map.provinces?.find((p) => p.id === 'prov_sh');
+
+  // Reset all province / city / district unlock states and restore catalog costs
+  for (const p of map.provinces ?? []) {
+    p.unlocked = false;
+  }
+  for (const c of map.cities ?? []) {
+    c.unlocked = false;
+  }
+  for (const d of map.districts) {
+    d.isStarter = false;
+    d.unlocked = false;
+    if (d.unlockCostWan <= 0) {
+      d.unlockCostWan =
+        SHANGHAI_BASE_COST_BY_ID.get(d.id) ??
+        NEIGHBOR_BASE_COST_BY_ID.get(d.id) ??
+        18000;
+    }
+  }
+
+  const targetProvId = prov?.id ?? 'prov_sh';
+  if (prov) prov.unlocked = true;
+
+  const provCities = (map.cities ?? []).filter((c) => c.provinceId === targetProvId);
+  let chosenCity = spawnInput.cityId
+    ? provCities.find((c) => c.id === spawnInput.cityId)
+    : undefined;
+
+  if (!chosenCity && provCities.length > 0) {
+    if (targetProvId === 'prov_sh') {
+      chosenCity = provCities.find((c) => c.id === 'city_sh') ?? provCities[0];
+    } else {
+      // Default to the most populous city in that province (provincial capital / primary metropolis)
+      const popByCity = new Map<string, number>();
+      for (const d of map.districts) {
+        if (d.provinceId === targetProvId && d.cityId) {
+          popByCity.set(d.cityId, (popByCity.get(d.cityId) ?? 0) + (d.realPopulation ?? 0));
+        }
+      }
+      chosenCity = [...provCities].sort(
+        (a, b) => (popByCity.get(b.id) ?? 0) - (popByCity.get(a.id) ?? 0)
+      )[0];
+    }
+  }
+
+  if (chosenCity) chosenCity.unlocked = true;
+
+  const cityDistricts = chosenCity
+    ? map.districts.filter((d) => d.cityId === chosenCity!.id)
+    : map.districts.filter((d) => d.provinceId === targetProvId);
+
+  let leadDist: DistrictInfo | undefined = spawnInput.districtId
+    ? cityDistricts.find((d) => d.id === spawnInput.districtId)
+    : undefined;
+
+  const starterDistricts: DistrictInfo[] = [];
+  if (chosenCity?.id === 'city_sh' && !spawnInput.districtId) {
+    for (const d of cityDistricts) {
+      if (map.startYear >= d.unlockYear) {
+        starterDistricts.push(d);
+      }
+    }
+    leadDist = cityDistricts.find((d) => d.id === 'd_hp') ?? starterDistricts[0];
+  } else if (cityDistricts.length > 0) {
+    if (!leadDist) {
+      const refX = spawnInput.wx ?? chosenCity?.x ?? prov?.x ?? cityDistricts[0].x;
+      const refY = spawnInput.wy ?? chosenCity?.y ?? prov?.y ?? cityDistricts[0].y;
+      leadDist = [...cityDistricts].sort((a, b) => {
+        const da = Math.hypot(a.x - refX, a.y - refY) / Math.max(120, Math.sqrt(a.realPopulation ?? 300000));
+        const db = Math.hypot(b.x - refX, b.y - refY) / Math.max(120, Math.sqrt(b.realPopulation ?? 300000));
+        return da - db;
+      })[0];
+    }
+    if (leadDist) {
+      starterDistricts.push(leadDist);
+      // Include up to 2 contiguous same-city core districts so players immediately have urban space
+      const sameCityAdj = (leadDist.adjacentDistrictIds ?? [])
+        .map((adjId) => cityDistricts.find((d) => d.id === adjId))
+        .filter((d): d is DistrictInfo => Boolean(d))
+        .filter((d) => d.id !== leadDist!.id)
+        .sort(
+          (a, b) =>
+            Math.hypot(a.x - leadDist!.x, a.y - leadDist!.y) -
+            Math.hypot(b.x - leadDist!.x, b.y - leadDist!.y)
+        );
+      for (const adj of sameCityAdj.slice(0, 2)) {
+        starterDistricts.push(adj);
+      }
+    }
+  }
+
+  for (const d of starterDistricts) {
+    d.isStarter = true;
+    d.unlocked = true;
+    d.unlockCostWan = 0;
+  }
+
+  const anchorX = spawnInput.wx ?? leadDist?.x ?? chosenCity?.x ?? prov?.x ?? map.width * 0.5;
+  const anchorY = spawnInput.wy ?? leadDist?.y ?? chosenCity?.y ?? prov?.y ?? map.height * 0.5;
+  let lat = spawnInput.lat ?? chosenCity?.lat ?? prov?.lat ?? 31.232;
+  let lon = spawnInput.lon ?? chosenCity?.lon ?? prov?.lon ?? 121.475;
+  if (map.geoBounds && (leadDist || chosenCity)) {
+    const ll = worldToLatLon(anchorX, anchorY, map.geoBounds, map.width, map.height);
+    lat = ll.lat;
+    lon = ll.lon;
+  }
+
+  const cityName = chosenCity?.name ?? prov?.name ?? '上海市';
+  const shortCity = cityName.replace(/(市|特別行政區|自治州|地區)$/, '') || cityName;
+  const finalSpawn: SpawnConfig = {
+    provinceId: targetProvId,
+    provinceAdcode: prov?.adcode,
+    provinceName: prov?.name ?? '上海市',
+    cityId: chosenCity?.id ?? 'city_sh',
+    cityName,
+    districtId: leadDist?.id,
+    districtName: leadDist?.name,
+    lat,
+    lon,
+    wx: anchorX,
+    wy: anchorY,
+  };
+
+  map.spawnConfig = finalSpawn;
+  map.name = `${shortCity}啟航 · 全國軌道都市圈`;
+  map.subtitle = `${finalSpawn.provinceName} · ${cityName}${leadDist ? `（${leadDist.name}）` : ''} · 分級聯動解鎖`;
+  return finalSpawn;
+}
+

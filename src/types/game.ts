@@ -171,6 +171,20 @@ export interface BuildingModel {
   lit: number; // 0..1 window illumination
 }
 
+export interface SpawnConfig {
+  provinceId: string;
+  provinceAdcode?: string;
+  provinceName: string;
+  cityId: string;
+  cityName: string;
+  districtId?: string;
+  districtName?: string;
+  lat: number;
+  lon: number;
+  wx: number;
+  wy: number;
+}
+
 export interface CityMap {
   cols: number;
   rows: number;
@@ -193,6 +207,7 @@ export interface CityMap {
   buildings: BuildingModel[];
   pois: CityPoi[];
   geoBounds?: GeoBounds;
+  spawnConfig?: SpawnConfig;
 }
 
 export interface WaitingPassenger {
