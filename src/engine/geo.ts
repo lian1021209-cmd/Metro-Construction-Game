@@ -117,7 +117,7 @@ export function getEsriLightGrayStyle(): StyleSpecification {
           'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
         ],
         tileSize: 256,
-        maxzoom: 14,
+        maxzoom: 16,
         attribution: 'Tiles © Esri — Esri, DeLorme, NAVTEQ',
       },
     },
@@ -134,7 +134,8 @@ export function getEsriLightGrayStyle(): StyleSpecification {
         type: 'raster',
         source: 'esri_light_gray',
         paint: {
-          'raster-contrast': 0.06,
+          'raster-brightness-max': 0.92,
+          'raster-contrast': 0.28,
           'raster-saturation': -0.05,
         },
       },
@@ -155,7 +156,7 @@ export function getEsriDarkGrayStyle(): StyleSpecification {
           'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
         ],
         tileSize: 256,
-        maxzoom: 14,
+        maxzoom: 16,
         attribution: 'Tiles © Esri — Esri, DeLorme, NAVTEQ',
       },
     },
@@ -173,8 +174,8 @@ export function getEsriDarkGrayStyle(): StyleSpecification {
         source: 'esri_dark_gray',
         paint: {
           'raster-brightness-min': 0.02,
-          'raster-contrast': 0.14,
-          'raster-saturation': 0.1,
+          'raster-contrast': 0.28,
+          'raster-saturation': 0.12,
         },
       },
     ],
@@ -283,6 +284,20 @@ const riversGeoJsonCache = new WeakMap<CityMap, RiverGeoJsonCollection>();
 const waterPolysGeoJsonCache = new WeakMap<CityMap, RiverGeoJsonCollection>();
 const pureLandGeoJsonCache = new WeakMap<CityMap, { distCount: number; data: GeoJsonMultiPolygonCollection }>();
 
+export interface RoadGeoJsonCollection {
+  type: 'FeatureCollection';
+  features: Array<{
+    type: 'Feature';
+    properties: { tier: 'highway' | 'arterial' | 'secondary' | 'local'; name: string };
+    geometry: {
+      type: 'LineString';
+      coordinates: number[][];
+    };
+  }>;
+}
+
+const roadsGeoJsonCache = new WeakMap<CityMap, { roadCount: number; data: RoadGeoJsonCollection }>();
+
 export function buildCityRiversGeoJson(map: CityMap): RiverGeoJsonCollection {
   if (!map.geoBounds) {
     return { type: 'FeatureCollection', features: [] };
@@ -381,6 +396,102 @@ export function buildWaterPolygonsGeoJson(map: CityMap): RiverGeoJsonCollection 
   const res: RiverGeoJsonCollection = { type: 'FeatureCollection', features };
   waterPolysGeoJsonCache.set(map, res);
   return res;
+}
+
+export function buildCityRoadsGeoJson(map: CityMap): RoadGeoJsonCollection {
+  if (!map.geoBounds || map.roads.length === 0) {
+    return { type: 'FeatureCollection', features: [] };
+  }
+  const cached = roadsGeoJsonCache.get(map);
+  if (cached && cached.roadCount === map.roads.length) {
+    return cached.data;
+  }
+  const geo = map.geoBounds;
+  const features: RoadGeoJsonCollection['features'] = [];
+
+  let curTier: 'highway' | 'arterial' | 'secondary' | 'local' | null = null;
+  let curName = '';
+  let curCoords: number[][] = [];
+  let lastWx = NaN;
+  let lastWy = NaN;
+
+  const flushChain = () => {
+    if (curTier && curCoords.length >= 2) {
+      features.push({
+        type: 'Feature',
+        properties: { tier: curTier, name: curName },
+        geometry: {
+          type: 'LineString',
+          coordinates: curCoords,
+        },
+      });
+    }
+    curTier = null;
+    curCoords = [];
+  };
+
+  for (const r of map.roads) {
+    const tier: 'highway' | 'arterial' | 'secondary' | 'local' =
+      r.tier ?? (r.isArterial ? 'arterial' : r.capacity >= 600 ? 'secondary' : 'local');
+
+    if (r.points && r.points.length >= 2) {
+      flushChain();
+      const coords: number[][] = [];
+      for (const pt of r.points) {
+        const ll = worldToLatLon(pt.x, pt.y, geo, map.width, map.height);
+        if (Number.isFinite(ll.lon) && Number.isFinite(ll.lat)) {
+          coords.push([ll.lon, ll.lat]);
+        }
+      }
+      if (coords.length >= 2) {
+        features.push({
+          type: 'Feature',
+          properties: { tier, name: r.name },
+          geometry: { type: 'LineString', coordinates: coords },
+        });
+      }
+      continue;
+    }
+
+    const canChain =
+      curTier === tier &&
+      Math.abs(r.x1 - lastWx) < 1e-4 &&
+      Math.abs(r.y1 - lastWy) < 1e-4 &&
+      curCoords.length < 64;
+
+    if (canChain) {
+      const ll2 = worldToLatLon(r.x2, r.y2, geo, map.width, map.height);
+      if (Number.isFinite(ll2.lon) && Number.isFinite(ll2.lat)) {
+        curCoords.push([ll2.lon, ll2.lat]);
+        lastWx = r.x2;
+        lastWy = r.y2;
+      }
+    } else {
+      flushChain();
+      const ll1 = worldToLatLon(r.x1, r.y1, geo, map.width, map.height);
+      const ll2 = worldToLatLon(r.x2, r.y2, geo, map.width, map.height);
+      if (
+        Number.isFinite(ll1.lon) &&
+        Number.isFinite(ll1.lat) &&
+        Number.isFinite(ll2.lon) &&
+        Number.isFinite(ll2.lat)
+      ) {
+        curTier = tier;
+        curName = r.name;
+        curCoords = [
+          [ll1.lon, ll1.lat],
+          [ll2.lon, ll2.lat],
+        ];
+        lastWx = r.x2;
+        lastWy = r.y2;
+      }
+    }
+  }
+  flushChain();
+
+  const data: RoadGeoJsonCollection = { type: 'FeatureCollection', features };
+  roadsGeoJsonCache.set(map, { roadCount: map.roads.length, data });
+  return data;
 }
 
 export function buildTieredRegionsGeoJson(
@@ -574,12 +685,13 @@ export async function fetchOverpassCityGeometry(
   const query = `
 [out:json][timeout:14];
 (
-  way["highway"~"motorway|trunk|primary|secondary|tertiary"]["name"](${cLat - dLatRoad},${cLon - dLonRoad},${cLat + dLatRoad},${cLon + dLonRoad});
+  way["highway"~"motorway|trunk|primary|secondary"](${cLat - dLatRoad},${cLon - dLonRoad},${cLat + dLatRoad},${cLon + dLonRoad});
+  way["highway"="tertiary"]["name"](${cLat - dLatRoad},${cLon - dLonRoad},${cLat + dLatRoad},${cLon + dLonRoad});
   way["building"](${cLat - dLatBld},${cLon - dLonBld},${cLat + dLatBld},${cLon + dLonBld});
   node["amenity"~"university|hospital"]["name"](${cLat - dLatRoad},${cLon - dLonRoad},${cLat + dLatRoad},${cLon + dLonRoad});
   node["aeroway"="terminal"]["name"](${cLat - 0.35},${cLon - 0.45},${cLat + 0.35},${cLon + 0.45});
 );
-out body 4200;
+out body 4500;
 >;
 out skel qt;
 `.trim();
@@ -659,13 +771,14 @@ out skel qt;
       if (el.type !== 'way' || !el.nodes || el.nodes.length < 2) continue;
 
       if (el.tags?.highway) {
-        const roadName =
+        const rawRoadName =
           el.tags['name:zh-Hant'] ||
           el.tags['name:zh-TW'] ||
           el.tags['name:zh'] ||
           el.tags.name ||
           el.tags.ref ||
-          '城市主幹道';
+          '';
+        const roadName = rawRoadName ? toTraditionalPlaceName(rawRoadName) : '';
         const isPrimary = el.tags.highway === 'motorway' || el.tags.highway === 'trunk' || el.tags.highway === 'primary';
         for (let i = 0; i < el.nodes.length - 1; i++) {
           const p1 = nodeMap.get(el.nodes[i]);
@@ -678,9 +791,9 @@ out skel qt;
             y1: p1.y,
             x2: p2.x,
             y2: p2.y,
-            tier: el.tags.highway === 'motorway' ? 'highway' : isPrimary ? 'arterial' : 'secondary',
+            tier: el.tags.highway === 'motorway' || el.tags.highway === 'trunk' ? 'highway' : isPrimary ? 'arterial' : el.tags.highway === 'secondary' ? 'secondary' : 'local',
             isArterial: isPrimary,
-            capacity: el.tags.highway === 'motorway' ? 1800 : isPrimary ? 1200 : 800,
+            capacity: el.tags.highway === 'motorway' || el.tags.highway === 'trunk' ? 1800 : isPrimary ? 1200 : 800,
             saturation: 0.12 + ((el.id % 30) / 100),
           });
         }
@@ -1012,9 +1125,10 @@ export async function fetchLocalOverpassStreets(
   const query = `
 [out:json][timeout:10];
 (
-  way["highway"~"motorway|trunk|primary|secondary|tertiary|residential"]["name"](${qLat - dLat},${qLon - dLon},${qLat + dLat},${qLon + dLon});
+  way["highway"~"motorway|trunk|primary|secondary|tertiary"](${qLat - dLat},${qLon - dLon},${qLat + dLat},${qLon + dLon});
+  way["highway"="residential"]["name"](${qLat - dLat},${qLon - dLon},${qLat + dLat},${qLon + dLon});
 );
-out body 2200;
+out body 2600;
 >;
 out skel qt;
 `.trim();
@@ -1068,8 +1182,7 @@ out skel qt;
             el.tags.name ||
             el.tags.ref ||
             '';
-          if (!rawName) continue;
-          const roadName = toTraditionalPlaceName(rawName);
+          const roadName = rawName ? toTraditionalPlaceName(rawName) : '';
           const isPrimary =
             el.tags.highway === 'motorway' ||
             el.tags.highway === 'trunk' ||
@@ -1086,15 +1199,20 @@ out skel qt;
               x2: p2.x,
               y2: p2.y,
               tier:
-                el.tags.highway === 'motorway'
+                el.tags.highway === 'motorway' || el.tags.highway === 'trunk'
                   ? 'highway'
                   : isPrimary
                   ? 'arterial'
-                  : el.tags.highway === 'residential'
+                  : el.tags.highway === 'residential' || el.tags.highway === 'tertiary'
                   ? 'local'
                   : 'secondary',
               isArterial: isPrimary,
-              capacity: el.tags.highway === 'motorway' ? 1800 : isPrimary ? 1200 : 800,
+              capacity:
+                el.tags.highway === 'motorway' || el.tags.highway === 'trunk'
+                  ? 1800
+                  : isPrimary
+                  ? 1200
+                  : 800,
               saturation: 0.14 + ((el.id % 25) / 100),
             });
           }

@@ -349,7 +349,7 @@ export default function App() {
   });
 
   const [lang, setLang] = useState<Language>('zh-Hant');
-  const [openMapStyle, setOpenMapStyle] = useState<OpenMapStyleId>('esri_light_gray');
+  const [openMapStyle, setOpenMapStyle] = useState<OpenMapStyleId>('esri_dark_gray');
   const [screen, setScreen] = useState<'TITLE' | 'PLAYING'>('TITLE');
   const [realCityId, setRealCityId] = useState<RealCityId>('shanghai');
   const [difficultyId, setDifficultyId] = useState<DifficultyLevel>('normal');
@@ -554,6 +554,7 @@ export default function App() {
         const newOnes = extraRoads.filter((r) => !existingIds.has(r.id));
         if (newOnes.length > 0) {
           targetMap.roads = [...targetMap.roads, ...newOnes];
+          setMapVersion((v) => v + 1);
         }
       }
     );
@@ -1118,6 +1119,7 @@ export default function App() {
             const newOnes = extraRoads.filter((r) => !existingIds.has(r.id));
             if (newOnes.length > 0) {
               targetMap.roads = [...targetMap.roads, ...newOnes];
+              setMapVersion((v) => v + 1);
             }
           }
         );
@@ -1227,6 +1229,7 @@ export default function App() {
             const newOnes = extraRoads.filter((r) => !existingIds.has(r.id));
             if (newOnes.length > 0) {
               targetMap.roads = [...targetMap.roads, ...newOnes];
+              setMapVersion((v) => v + 1);
             }
           }
         );

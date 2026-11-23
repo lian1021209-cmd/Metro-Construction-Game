@@ -674,9 +674,9 @@ export const FloatingHud: React.FC<FloatingHudProps> = ({
               <div className="grid grid-cols-1 gap-1">
                 {(
                   [
-                    { id: 'esri_light_gray' as const, label: 'Esri 簡約淺灰地圖 (預設)' },
+                    { id: 'esri_dark_gray' as const, label: 'Esri 夜間深灰地圖 (預設)' },
+                    { id: 'esri_light_gray' as const, label: 'Esri 簡約淺灰地圖' },
                     { id: 'canvas_vector' as const, label: '純淨向量白圖 (離線可用)' },
-                    { id: 'esri_dark_gray' as const, label: 'Esri 夜間深灰地圖' },
                   ]
                 ).map((stOpt) => (
                   <button

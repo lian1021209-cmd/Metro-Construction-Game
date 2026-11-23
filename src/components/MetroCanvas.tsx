@@ -35,6 +35,7 @@ import {
 } from '../engine/simulation';
 import {
   buildCityRiversGeoJson,
+  buildCityRoadsGeoJson,
   buildPopulationHeatmapCanvas,
   buildPureLandGeoJson,
   buildTieredRegionsGeoJson,
@@ -405,8 +406,8 @@ function buildBaseMapCanvas(map: CityMap, isDark = false): HTMLCanvasElement {
         ];
 
   // Local capillary streets
-  ctx.strokeStyle = isDark ? 'rgba(78, 84, 93, 0.56)' : 'rgba(203, 213, 225, 0.72)';
-  ctx.lineWidth = 1.0;
+  ctx.strokeStyle = isDark ? 'rgba(51, 65, 85, 0.82)' : 'rgba(71, 85, 105, 0.84)';
+  ctx.lineWidth = 1.15;
   ctx.beginPath();
   for (const road of map.roads) {
     const tier = road.tier ?? (road.isArterial ? 'arterial' : road.capacity >= 600 ? 'secondary' : 'local');
@@ -416,8 +417,8 @@ function buildBaseMapCanvas(map: CityMap, isDark = false): HTMLCanvasElement {
   ctx.stroke();
 
   // Secondary urban avenues
-  ctx.strokeStyle = isDark ? 'rgba(98, 105, 115, 0.72)' : 'rgba(203, 213, 225, 0.92)';
-  ctx.lineWidth = 1.65;
+  ctx.strokeStyle = isDark ? 'rgba(71, 85, 105, 0.92)' : 'rgba(51, 65, 85, 0.92)';
+  ctx.lineWidth = 1.9;
   ctx.beginPath();
   for (const road of map.roads) {
     const tier = road.tier ?? (road.isArterial ? 'arterial' : road.capacity >= 600 ? 'secondary' : 'local');
@@ -427,8 +428,8 @@ function buildBaseMapCanvas(map: CityMap, isDark = false): HTMLCanvasElement {
   ctx.stroke();
 
   // Primary arterials: casing + core
-  ctx.strokeStyle = isDark ? '#1D2025' : '#CBD5E1';
-  ctx.lineWidth = 3.8;
+  ctx.strokeStyle = isDark ? '#020617' : '#0F172A';
+  ctx.lineWidth = 4.2;
   ctx.beginPath();
   for (const road of map.roads) {
     const tier = road.tier ?? (road.isArterial ? 'arterial' : 'secondary');
@@ -437,8 +438,8 @@ function buildBaseMapCanvas(map: CityMap, isDark = false): HTMLCanvasElement {
   }
   ctx.stroke();
 
-  ctx.strokeStyle = isDark ? '#6B727D' : '#FFFFFF';
-  ctx.lineWidth = 1.9;
+  ctx.strokeStyle = isDark ? '#475569' : '#334155';
+  ctx.lineWidth = 2.2;
   ctx.beginPath();
   for (const road of map.roads) {
     const tier = road.tier ?? (road.isArterial ? 'arterial' : 'secondary');
@@ -448,8 +449,8 @@ function buildBaseMapCanvas(map: CityMap, isDark = false): HTMLCanvasElement {
   ctx.stroke();
 
   // Ring roads & expressways
-  ctx.strokeStyle = isDark ? '#171A1E' : '#94A3B8';
-  ctx.lineWidth = 5.6;
+  ctx.strokeStyle = isDark ? '#020617' : '#451A03';
+  ctx.lineWidth = 6.0;
   ctx.beginPath();
   for (const road of map.roads) {
     if (road.tier !== 'highway') continue;
@@ -457,17 +458,8 @@ function buildBaseMapCanvas(map: CityMap, isDark = false): HTMLCanvasElement {
   }
   ctx.stroke();
 
-  ctx.strokeStyle = isDark ? '#7E8591' : '#FEF3C7';
-  ctx.lineWidth = 2.7;
-  ctx.beginPath();
-  for (const road of map.roads) {
-    if (road.tier !== 'highway') continue;
-    traceRoadPoints(ctx, getPts(road));
-  }
-  ctx.stroke();
-
-  ctx.strokeStyle = isDark ? 'rgba(203, 213, 225, 0.24)' : 'rgba(217, 119, 6, 0.28)';
-  ctx.lineWidth = 0.85;
+  ctx.strokeStyle = isDark ? '#B45309' : '#D97706';
+  ctx.lineWidth = 3.1;
   ctx.beginPath();
   for (const road of map.roads) {
     if (road.tier !== 'highway') continue;
@@ -534,6 +526,131 @@ function upsertGeoJsonSource(
 
 const uploadedHeatmapUrlByMap = new WeakMap<maplibregl.Map, string>();
 const pureLandDistCountByMap = new WeakMap<maplibregl.Map, number>();
+const uploadedRoadCountByMap = new WeakMap<maplibregl.Map, number>();
+
+function syncMapLibreRoadsOnly(
+  mlMap: maplibregl.Map,
+  cityMap: CityMap,
+  styleId: OpenMapStyleId
+) {
+  if (!cityMap.geoBounds || !mlMap.getStyle() || cityMap.roads.length === 0) return;
+
+  const isDark = styleId === 'esri_dark_gray';
+  if (!mlMap.getSource('city-roads-geojson') || uploadedRoadCountByMap.get(mlMap) !== cityMap.roads.length) {
+    const roadsData = buildCityRoadsGeoJson(cityMap);
+    if (roadsData.features.length === 0) return;
+    upsertGeoJsonSource(mlMap, 'city-roads-geojson', roadsData, {
+      tolerance: 0.2,
+      buffer: 128,
+      maxzoom: 19,
+    });
+    uploadedRoadCountByMap.set(mlMap, cityMap.roads.length);
+  }
+
+  const beforeRoadsTarget = mlMap.getLayer('city-water-polygons-fill')
+    ? 'city-water-polygons-fill'
+    : mlMap.getLayer('city-rivers-casing')
+    ? 'city-rivers-casing'
+    : mlMap.getLayer('city-regions-fill')
+    ? 'city-regions-fill'
+    : undefined;
+
+  if (!mlMap.getLayer('city-roads-casing')) {
+    mlMap.addLayer(
+      {
+        id: 'city-roads-casing',
+        type: 'line',
+        source: 'city-roads-geojson',
+        minzoom: 9,
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': [
+            'match',
+            ['get', 'tier'],
+            'highway',
+            isDark ? '#020617' : '#451A03',
+            'arterial',
+            isDark ? '#020617' : '#0F172A',
+            'secondary',
+            isDark ? '#090F1D' : '#1E293B',
+            isDark ? '#0B1120' : '#334155',
+          ],
+          'line-width': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            9,
+            ['match', ['get', 'tier'], 'highway', 2.2, 'arterial', 1.4, 'secondary', 0.8, 0],
+            12,
+            ['match', ['get', 'tier'], 'highway', 4.6, 'arterial', 3.2, 'secondary', 2.0, 0.9],
+            15,
+            ['match', ['get', 'tier'], 'highway', 8.2, 'arterial', 6.2, 'secondary', 4.2, 2.4],
+            18,
+            ['match', ['get', 'tier'], 'highway', 15, 'arterial', 11.5, 'secondary', 8.2, 5.2],
+          ],
+          'line-opacity': [
+            'match',
+            ['get', 'tier'],
+            'local',
+            ['interpolate', ['linear'], ['zoom'], 12, 0, 13.5, 0.80, 16, 0.92],
+            'secondary',
+            ['interpolate', ['linear'], ['zoom'], 9.5, 0, 11.5, 0.85, 15, 0.95],
+            0.95,
+          ],
+        },
+      },
+      beforeRoadsTarget
+    );
+  }
+
+  if (!mlMap.getLayer('city-roads-core')) {
+    mlMap.addLayer(
+      {
+        id: 'city-roads-core',
+        type: 'line',
+        source: 'city-roads-geojson',
+        minzoom: 9,
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': [
+            'match',
+            ['get', 'tier'],
+            'highway',
+            isDark ? '#B45309' : '#D97706',
+            'arterial',
+            isDark ? '#64748B' : '#334155',
+            'secondary',
+            isDark ? '#475569' : '#475569',
+            isDark ? '#334155' : '#64748B',
+          ],
+          'line-width': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            9,
+            ['match', ['get', 'tier'], 'highway', 1.1, 'arterial', 0.65, 'secondary', 0.35, 0],
+            12,
+            ['match', ['get', 'tier'], 'highway', 2.5, 'arterial', 1.7, 'secondary', 1.0, 0.4],
+            15,
+            ['match', ['get', 'tier'], 'highway', 5.0, 'arterial', 3.8, 'secondary', 2.4, 1.3],
+            18,
+            ['match', ['get', 'tier'], 'highway', 10.5, 'arterial', 7.8, 'secondary', 5.4, 3.3],
+          ],
+          'line-opacity': [
+            'match',
+            ['get', 'tier'],
+            'local',
+            ['interpolate', ['linear'], ['zoom'], 12, 0, 13.5, 0.90, 16, 0.98],
+            'secondary',
+            ['interpolate', ['linear'], ['zoom'], 9.5, 0, 11.5, 0.90, 15, 0.98],
+            1,
+          ],
+        },
+      },
+      beforeRoadsTarget
+    );
+  }
+}
 
 /**
  * Syncs WebGL GeoJSON layers for pure vector land/water fallback AND 3-tier progressive
@@ -755,6 +872,9 @@ function syncMapLibreVectorLayers(
       mlMap.removeSource('population-tw-heatmap-source');
     }
   }
+
+  // Crisp multi-tier OSM WebGL road vectors positioned above heatmap and beneath rivers/locked masks
+  syncMapLibreRoadsOnly(mlMap, cityMap, styleId);
 
   if (useVectorBase) {
     if (!mlMap.getSource('city-water-polygons-geojson')) {
@@ -1197,6 +1317,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
         prevHoveredRegionRef.current = null;
         uploadedHeatmapUrlByMap.delete(mlMap);
         pureLandDistCountByMap.delete(mlMap);
+        uploadedRoadCountByMap.delete(mlMap);
         const hm = ensurePopHeatmap();
         syncMapLibreVectorLayers(
           mlMap,
@@ -1208,6 +1329,44 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
           Boolean(uiRef.current.includeTaiwan),
           getSpawnOpts()
         );
+      });
+
+      let movePrefetchTimer: number | null = null;
+      let lastMoveRoadKey = '';
+      mlMap.on('moveend', () => {
+        if (uiRef.current.selectingSpawn || mlMap.getZoom() < 12.2) return;
+        const center = mlMap.getCenter();
+        const sim = simDataRef.current;
+        if (!sim.map.geoBounds) return;
+        const rKey = `${center.lat.toFixed(2)}_${center.lng.toFixed(2)}`;
+        if (rKey === lastMoveRoadKey) return;
+        lastMoveRoadKey = rKey;
+        if (movePrefetchTimer) window.clearTimeout(movePrefetchTimer);
+        movePrefetchTimer = window.setTimeout(() => {
+          const curMap = simDataRef.current.map;
+          if (!curMap.geoBounds) return;
+          const pt = latLonToWorld(center.lat, center.lng, curMap.geoBounds, curMap.width, curMap.height);
+          if (isWaterAt(curMap, pt.x, pt.y).isWater || findLockedDistrictAt(curMap, pt.x, pt.y)) {
+            return;
+          }
+          fetchLocalOverpassStreets(center.lat, center.lng, curMap.geoBounds, curMap.width, curMap.height).then(
+            (extraRoads) => {
+              if (!extraRoads || extraRoads.length === 0 || simDataRef.current.map !== curMap) return;
+              const existingIds = new Set(curMap.roads.map((r) => r.id));
+              const newOnes = extraRoads.filter((r) => !existingIds.has(r.id));
+              if (newOnes.length > 0) {
+                curMap.roads = [...curMap.roads, ...newOnes];
+                if (mlMapRef.current === mlMap) {
+                  try {
+                    syncMapLibreRoadsOnly(mlMap, curMap, uiRef.current.openMapStyle);
+                  } catch {
+                    // ignore if style reloading
+                  }
+                }
+              }
+            }
+          );
+        }, 260);
       });
 
       mlMap.on('error', (ev) => {
@@ -1233,6 +1392,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
       }
 
       return () => {
+        if (movePrefetchTimer) window.clearTimeout(movePrefetchTimer);
         if (resizeObserver) resizeObserver.disconnect();
         mlMap.remove();
         mlMapRef.current = null;
@@ -1691,30 +1851,32 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
                 }
               }
 
-              // Crisp OSM streets over vector land OR at high zoom (1:1000 over Esri tiles)
-              ctx.save();
-              ctx.strokeStyle = pureVectorFallbackRef.current
-                ? isDarkMap ? 'rgba(98, 105, 115, 0.55)' : 'rgba(148, 163, 184, 0.36)'
-                : isDarkMap ? 'rgba(148, 163, 184, 0.24)' : 'rgba(100, 116, 139, 0.22)';
-              ctx.lineWidth = currentMlZoom >= 17.5 ? 1.8 : 1.3;
-              for (const road of st.map.roads) {
-                if (
-                  Math.max(road.x1, road.x2) < visMinX ||
-                  Math.min(road.x1, road.x2) > visMaxX ||
-                  Math.max(road.y1, road.y2) < visMinY ||
-                  Math.min(road.y1, road.y2) > visMaxY
-                ) {
-                  continue;
+              // Crisp OSM streets fallback only if MapLibre WebGL road layer isn't mounted yet
+              if (!mlMap || !mlMap.getLayer('city-roads-core')) {
+                ctx.save();
+                ctx.strokeStyle = pureVectorFallbackRef.current
+                  ? isDarkMap ? 'rgba(71, 85, 105, 0.85)' : 'rgba(51, 65, 85, 0.88)'
+                  : isDarkMap ? 'rgba(71, 85, 105, 0.78)' : 'rgba(30, 41, 59, 0.78)';
+                ctx.lineWidth = currentMlZoom >= 17.5 ? 2.2 : 1.5;
+                for (const road of st.map.roads) {
+                  if (
+                    Math.max(road.x1, road.x2) < visMinX ||
+                    Math.min(road.x1, road.x2) > visMaxX ||
+                    Math.max(road.y1, road.y2) < visMinY ||
+                    Math.min(road.y1, road.y2) > visMaxY
+                  ) {
+                    continue;
+                  }
+                  const p1 = proj(road.x1, road.y1);
+                  const p2 = proj(road.x2, road.y2);
+                  if (!isSaneScreenPt(p1) || !isSaneScreenPt(p2)) continue;
+                  ctx.beginPath();
+                  ctx.moveTo(p1.x, p1.y);
+                  ctx.lineTo(p2.x, p2.y);
+                  ctx.stroke();
                 }
-                const p1 = proj(road.x1, road.y1);
-                const p2 = proj(road.x2, road.y2);
-                if (!isSaneScreenPt(p1) || !isSaneScreenPt(p2)) continue;
-                ctx.beginPath();
-                ctx.moveTo(p1.x, p1.y);
-                ctx.lineTo(p2.x, p2.y);
-                ctx.stroke();
+                ctx.restore();
               }
-              ctx.restore();
             }
 
             // 2. Smooth Population Surface (Canvas2D fallback when WebGL MapLibre inactive) + Metro Coverage / Zoning Overlays
@@ -3176,7 +3338,7 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
         let bestRoad: RoadSegment | null = null;
         let bestDist = 10;
         for (const r of simDataRef.current.map.roads) {
-          if (!r.isArterial) continue;
+          if (!r.isArterial || !r.name) continue;
           const pts =
             r.points && r.points.length >= 2
               ? r.points
@@ -3250,6 +3412,14 @@ export const MetroCanvas = React.forwardRef<MetroCanvasHandle, MetroCanvasProps>
               const newOnes = extraRoads.filter((r) => !existingIds.has(r.id));
               if (newOnes.length > 0) {
                 sim.map.roads = [...sim.map.roads, ...newOnes];
+                const liveMl = mlMapRef.current;
+                if (liveMl) {
+                  try {
+                    syncMapLibreRoadsOnly(liveMl, sim.map, uiRef.current.openMapStyle);
+                  } catch {
+                    // ignore if style reloading
+                  }
+                }
               }
             });
           }, 180);
